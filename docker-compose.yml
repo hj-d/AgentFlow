@@ -1,0 +1,29 @@
+services:
+  server:
+    build: ./server
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - SNAPSHOT_SIZE=2000
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    ports:
+      - "8080:8080"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  # Optional demo traffic generator. Enable with:  docker compose --profile demo up
+  simulator:
+    build: ./server
+    command: ["node", "dist/simulator.js"]
+    environment:
+      - INGEST_URL=http://server:3001/ingest
+      - SIM_INTERVAL_MS=350
+    depends_on:
+      - server
+    profiles: ["demo"]
+    restart: unless-stopped

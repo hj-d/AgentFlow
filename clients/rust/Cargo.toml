@@ -1,0 +1,13 @@
+[package]
+name = "agentflow-client"
+version = "0.1.0"
+edition = "2021"
+description = "AgentFlow observability client SDK (batched, fire-and-forget)"
+
+[dependencies]
+serde_json = "1"
+ureq = "2"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
