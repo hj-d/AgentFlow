@@ -15,6 +15,7 @@ function reset() {
     edges: {},
     tasks: {},
     tasksTotal: 0,
+    bbSeen: false,
     selectedTask: null,
     space: "default",
     spaces: [],
@@ -227,6 +228,25 @@ describe("store: blackboard", () => {
     useStore.getState().ingest(bb({ key: "k3", value: 1 }));
     useStore.getState().ingest(bb({ op: "delete", key: "k3" }));
     expect(useStore.getState().blackboard["k3"]).toBeUndefined();
+  });
+
+  it("bbSeen flips true on the first blackboard event (and not on message/agent)", () => {
+    useStore.getState().ingest(msg());
+    useStore.getState().ingest(agent());
+    expect(useStore.getState().bbSeen).toBe(false); // no blackboard activity yet
+    useStore.getState().ingest(bb({ key: "k", value: 1 }));
+    expect(useStore.getState().bbSeen).toBe(true);
+  });
+
+  it("bbSeen resets on workspace switch and is rebuilt from the snapshot", () => {
+    useStore.getState().setJoin(() => {});
+    useStore.getState().ingest(bb({ key: "k", value: 1 }));
+    expect(useStore.getState().bbSeen).toBe(true);
+    useStore.getState().joinSpace("other");
+    expect(useStore.getState().bbSeen).toBe(false); // fresh space hides the bb node
+    // a snapshot that contains a blackboard event reveals it again
+    useStore.getState().loadSnapshot([bb({ key: "k2", value: 2 })]);
+    expect(useStore.getState().bbSeen).toBe(true);
   });
 });
 

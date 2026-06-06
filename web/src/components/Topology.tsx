@@ -167,6 +167,7 @@ export function Topology() {
   const pulses = useStore((s) => s.pulses);
   const edges = useStore((s) => s.edges);
   const showEdgeData = useStore((s) => s.showEdgeData);
+  const bbSeen = useStore((s) => s.bbSeen);
   const expirePulses = useStore((s) => s.expirePulses);
   const expireEdges = useStore((s) => s.expireEdges);
   const [, force] = useState(0);
@@ -240,8 +241,8 @@ export function Topology() {
           );
         })}
 
-        {/* blackboard node */}
-        {layout.infra.map((n) => (
+        {/* blackboard node — revealed only after the blackboard is first used */}
+        {(bbSeen ? layout.infra : []).map((n) => (
           <g key={n.id}>
             <rect
               x={n.x}

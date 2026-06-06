@@ -64,6 +64,9 @@ interface State {
   edges: Record<string, EdgeState>;
   tasks: Record<string, TaskSummary>;
   tasksTotal: number;
+  /** Becomes true after the first blackboard event in the current space, so the
+   *  Topology can reveal the Blackboard backbone node only once it's actually used. */
+  bbSeen: boolean;
   selectedTask: string | null;
   space: string; // current workspace being viewed
   spaces: SpaceSummary[]; // directory of active workspaces
@@ -148,6 +151,7 @@ export const useStore = create<State>((set) => ({
   edges: {},
   tasks: {},
   tasksTotal: 0,
+  bbSeen: false,
   selectedTask: null,
   space: "default",
   spaces: [],
@@ -175,7 +179,7 @@ export const useStore = create<State>((set) => ({
     set((s) => {
       s.subscribe(t); // tell the server to (un)stream this task's detail
       // clear task-scoped derived state immediately; snapshot will repopulate
-      return { selectedTask: t, edges: {}, pulses: [], events: [], blackboard: {} };
+      return { selectedTask: t, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false };
     }),
   joinSpace: (sp) =>
     set((s) => {
@@ -189,6 +193,7 @@ export const useStore = create<State>((set) => ({
         pulses: [],
         events: [],
         blackboard: {},
+        bbSeen: false,
         tasks: {},
         tasksTotal: 0,
       };
@@ -205,14 +210,14 @@ export const useStore = create<State>((set) => ({
         tasks,
         tasksTotal: Math.max(0, s.tasksTotal - (existed ? 1 : 0)),
         // if the deleted task was focused, drop back to the all-tasks view
-        ...(wasSelected ? { selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {} } : {}),
+        ...(wasSelected ? { selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false } : {}),
       };
     }),
   clearSpace: () =>
     set((s) => {
       s.control({ type: "clearSpace" });
       // keep agents (presence is re-sent by the server snapshot); drop everything task-scoped
-      return { tasks: {}, tasksTotal: 0, selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {} };
+      return { tasks: {}, tasksTotal: 0, selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false };
     }),
   deleteSpace: (space) =>
     set((s) => {
@@ -224,7 +229,7 @@ export const useStore = create<State>((set) => ({
   ingestMany: (es) => set((s) => es.reduce((acc, e) => applyEvent(acc, e), s)),
   loadSnapshot: (es) =>
     set((s) => {
-      const base: State = { ...s, edges: {}, pulses: [], events: [], blackboard: {} };
+      const base: State = { ...s, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false };
       return es.reduce((acc, e) => applyEvent(acc, e), base);
     }),
 
@@ -305,5 +310,8 @@ function applyEvent(s: State, e: FlowEvent): State {
   const events = [e, ...s.events];
   if (events.length > MAX_EVENTS) events.length = MAX_EVENTS;
 
-  return { ...s, agents, blackboard, pulses, edges, events };
+  // reveal the Blackboard backbone node only once the blackboard is actually used
+  const bbSeen = s.bbSeen || e.kind === "blackboard";
+
+  return { ...s, agents, blackboard, pulses, edges, events, bbSeen };
 }
