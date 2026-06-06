@@ -27,6 +27,7 @@ export interface MessageEventInput {
   body?: unknown;
   size?: number;
   tool?: string;
+  space?: string;
   taskId?: string;
   traceId?: string;
   correlationId?: string;
@@ -45,6 +46,7 @@ export interface BlackboardEventInput {
   value?: unknown;
   version?: number;
   tool?: string;
+  space?: string;
   taskId?: string;
   traceId?: string;
   correlationId?: string;
@@ -62,6 +64,7 @@ export interface AgentEventInput {
   role?: string;
   capabilities?: string[];
   tool?: string;
+  space?: string;
   traceId?: string;
   ts?: number;
   eventId?: string;
@@ -77,6 +80,8 @@ type FetchLike = (
 export interface AgentFlowOptions {
   /** Collector ingest endpoint, e.g. http://collector:3001/ingest */
   url: string;
+  /** Workspace (top-level isolation key) applied to every event. Default "default". */
+  space?: string;
   /** Default deviceId applied to every event (overridable per call). */
   deviceId?: string;
   /** Default teamId applied to every event (overridable per call). */
@@ -96,12 +101,13 @@ export interface AgentFlowOptions {
 export class AgentFlowClient {
   private queue: FlowEventInput[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
-  private readonly opts: Required<Omit<AgentFlowOptions, "deviceId" | "teamId" | "onError">> &
-    Pick<AgentFlowOptions, "deviceId" | "teamId" | "onError">;
+  private readonly opts: Required<Omit<AgentFlowOptions, "deviceId" | "teamId" | "onError" | "space">> &
+    Pick<AgentFlowOptions, "deviceId" | "teamId" | "onError" | "space">;
 
   constructor(options: AgentFlowOptions) {
     this.opts = {
       url: options.url,
+      space: options.space,
       deviceId: options.deviceId,
       teamId: options.teamId,
       batchSize: options.batchSize ?? 20,
@@ -120,6 +126,7 @@ export class AgentFlowClient {
   emit(event: FlowEventInput): void {
     const e = {
       ...event,
+      space: event.space ?? this.opts.space,
       deviceId: event.deviceId ?? this.opts.deviceId,
       teamId: event.teamId ?? this.opts.teamId,
     } as FlowEventInput;

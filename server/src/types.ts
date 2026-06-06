@@ -7,11 +7,18 @@ export type EventKind = "message" | "blackboard" | "agent";
 export const MESSAGE_SERVER_ID = "__message_server__";
 export const BLACKBOARD_ID = "__blackboard__";
 
+/** Default workspace when a producer/client doesn't specify one. */
+export const DEFAULT_SPACE = "default";
+
 export interface FlowEventBase {
   /** ULID-ish unique id (server-assigned if omitted by producer). */
   eventId: string;
   /** epoch ms, normalized to the collector clock. */
   ts: number;
+
+  // workspace — top-level isolation key (per test session / user).
+  // Tasks span devices, so the isolation boundary sits ABOVE deviceId.
+  space?: string;
 
   // hierarchical coordinates
   deviceId: string;
@@ -76,13 +83,24 @@ export interface TaskSummary {
   agents: number; // distinct agents involved
 }
 
+/** Aggregate per workspace — lets the UI offer a directory of active sessions. */
+export interface SpaceSummary {
+  space: string;
+  agents: number;
+  tasks: number;
+  lastTs: number;
+}
+
 // ---- WebSocket protocol ----
 // server -> client
 export type ServerMessage =
-  | { type: "snapshot"; events: FlowEvent[]; taskId: string | null } // scoped re-sync (presence + focused task)
+  | { type: "snapshot"; events: FlowEvent[]; space: string; taskId: string | null } // scoped re-sync
   | { type: "event"; event: FlowEvent }
-  | { type: "tasks"; tasks: TaskSummary[]; total: number } // periodic task list (the scalable default view)
+  | { type: "tasks"; tasks: TaskSummary[]; total: number } // task list for the client's space
+  | { type: "spaces"; spaces: SpaceSummary[] } // directory of all workspaces
   | { type: "stats"; connected: number; rate: number };
 
 // client -> server
-export type ClientMessage = { type: "subscribeTask"; taskId: string | null };
+export type ClientMessage =
+  | { type: "join"; space: string } // switch the workspace this client is viewing
+  | { type: "subscribeTask"; taskId: string | null };

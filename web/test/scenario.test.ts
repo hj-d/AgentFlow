@@ -79,7 +79,7 @@ const get = (d: string, t: string, a: string) => AGENTS.find((s) => s.device ===
 function reset() {
   useStore.setState({
     connected: false, paused: false, rate: 0, events: [], agents: {}, blackboard: {},
-    pulses: [], edges: {}, tasks: {}, tasksTotal: 0, selectedTask: null,
+    pulses: [], edges: {}, tasks: {}, tasksTotal: 0, selectedTask: null, space: "default", spaces: [],
     filters: { device: null, team: null, kind: "all", text: "" },
   });
 }

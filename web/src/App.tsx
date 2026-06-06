@@ -5,6 +5,7 @@ import { Topology } from "./components/Topology";
 import { EventFeed } from "./components/EventFeed";
 import { BlackboardPanel } from "./components/BlackboardPanel";
 import { TaskList } from "./components/TaskList";
+import { SpaceSwitcher } from "./components/SpaceSwitcher";
 import { FilterBar } from "./components/FilterBar";
 
 export default function App() {
@@ -23,6 +24,7 @@ export default function App() {
         <div className="brand">
           <span className="logo">◈</span> AgentFlow
         </div>
+        <SpaceSwitcher />
         <div className="status">
           <span className={"dot " + (connected ? "on" : "off")} />
           {connected ? "connected" : "disconnected"}

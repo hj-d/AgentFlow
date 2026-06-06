@@ -50,6 +50,24 @@ body {
 .logo {
   color: var(--accent);
 }
+.space-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.space-switcher .ws-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+.space-switcher input {
+  background: var(--panel2);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font: inherit;
+  width: 150px;
+}
 .status {
   display: flex;
   align-items: center;

@@ -26,6 +26,7 @@ class AgentFlowClient:
     def __init__(
         self,
         url: str,
+        space: Optional[str] = None,
         device_id: Optional[str] = None,
         team_id: Optional[str] = None,
         batch_size: int = 20,
@@ -36,6 +37,7 @@ class AgentFlowClient:
         sender: Optional[Callable[[str, bytes], None]] = None,
     ) -> None:
         self._url = url
+        self._space = space
         self._device_id = device_id
         self._team_id = team_id
         self._batch_size = batch_size
@@ -56,6 +58,8 @@ class AgentFlowClient:
     # ---- public API ----
     def emit(self, event: dict[str, Any]) -> None:
         """Enqueue any event dict. Never raises."""
+        if self._space is not None:
+            event.setdefault("space", self._space)
         event.setdefault("deviceId", self._device_id)
         event.setdefault("teamId", self._team_id)
         flush_now = False

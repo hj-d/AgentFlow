@@ -31,6 +31,7 @@ use serde_json::{json, Map, Value};
 /// Client configuration. Build with the fluent setters.
 pub struct Options {
     pub url: String,
+    pub space: Option<String>,
     pub device_id: Option<String>,
     pub team_id: Option<String>,
     pub batch_size: usize,
@@ -43,6 +44,7 @@ impl Options {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
+            space: None,
             device_id: None,
             team_id: None,
             batch_size: 20,
@@ -50,6 +52,11 @@ impl Options {
             max_queue: 5000,
             timeout: Duration::from_millis(500),
         }
+    }
+    /// Workspace (top-level isolation key) applied to every event.
+    pub fn space(mut self, v: impl Into<String>) -> Self {
+        self.space = Some(v.into());
+        self
     }
     pub fn device_id(mut self, v: impl Into<String>) -> Self {
         self.device_id = Some(v.into());
@@ -81,6 +88,11 @@ struct Shared {
 
 impl Shared {
     fn enqueue(&self, mut obj: Map<String, Value>) {
+        if !obj.contains_key("space") {
+            if let Some(sp) = &self.opts.space {
+                obj.insert("space".into(), json!(sp));
+            }
+        }
         if !obj.contains_key("deviceId") {
             if let Some(d) = &self.opts.device_id {
                 obj.insert("deviceId".into(), json!(d));

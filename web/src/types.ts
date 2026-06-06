@@ -11,6 +11,7 @@ export interface FlowEventBase {
   deviceId: string;
   teamId: string;
   agentId: string;
+  space?: string; // workspace (top-level isolation key)
   taskId?: string; // the merge key — correlates work across devices
   traceId?: string;
   correlationId?: string;
@@ -56,8 +57,16 @@ export interface TaskSummary {
   agents: number;
 }
 
+export interface SpaceSummary {
+  space: string;
+  agents: number;
+  tasks: number;
+  lastTs: number;
+}
+
 export type ServerMessage =
-  | { type: "snapshot"; events: FlowEvent[]; taskId: string | null }
+  | { type: "snapshot"; events: FlowEvent[]; space: string; taskId: string | null }
   | { type: "event"; event: FlowEvent }
   | { type: "tasks"; tasks: TaskSummary[]; total: number }
+  | { type: "spaces"; spaces: SpaceSummary[] }
   | { type: "stats"; connected: number; rate: number };

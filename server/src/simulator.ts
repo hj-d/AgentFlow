@@ -58,11 +58,12 @@ function pick<T>(arr: T[]): T {
 }
 const rnd = (n: number) => Math.floor(Math.random() * n);
 
-function message(from: Spec, to: string, msgType: string, body: unknown, taskId: string): FlowEventInput {
+function message(from: Spec, to: string, msgType: string, body: unknown, taskId: string, space: string): FlowEventInput {
   const ts = Date.now();
   return {
     eventId: makeEventId(ts),
     ts,
+    space,
     deviceId: from.device,
     teamId: from.team,
     agentId: from.agent,
@@ -78,11 +79,12 @@ function message(from: Spec, to: string, msgType: string, body: unknown, taskId:
   };
 }
 
-function bbWrite(by: Spec, key: string, value: unknown, taskId: string): FlowEventInput {
+function bbWrite(by: Spec, key: string, value: unknown, taskId: string, space: string): FlowEventInput {
   const ts = Date.now();
   return {
     eventId: makeEventId(ts),
     ts,
+    space,
     deviceId: by.device,
     teamId: by.team,
     agentId: by.agent,
@@ -95,11 +97,12 @@ function bbWrite(by: Spec, key: string, value: unknown, taskId: string): FlowEve
   };
 }
 
-function bbRead(by: Spec, key: string, taskId: string): FlowEventInput {
+function bbRead(by: Spec, key: string, taskId: string, space: string): FlowEventInput {
   const ts = Date.now();
   return {
     eventId: makeEventId(ts),
     ts,
+    space,
     deviceId: by.device,
     teamId: by.team,
     agentId: by.agent,
@@ -110,11 +113,12 @@ function bbRead(by: Spec, key: string, taskId: string): FlowEventInput {
   };
 }
 
-function agentEvent(s: Spec, status: "online" | "offline"): FlowEventInput {
+function agentEvent(s: Spec, status: "online" | "offline", space: string): FlowEventInput {
   const ts = Date.now();
   return {
     eventId: makeEventId(ts),
     ts,
+    space,
     deviceId: s.device,
     teamId: s.team,
     agentId: s.agent,
@@ -136,9 +140,19 @@ async function post(batch: FlowEventInput[]) {
   }
 }
 
+// Workspaces to simulate (each is fully isolated in the UI). Override with e.g.
+//   SPACES=alice,bob npm run sim
+const SPACES = (process.env.SPACES ?? "demo").split(",").map((s) => s.trim()).filter(Boolean);
+
 async function registerAll() {
-  await post(AGENTS.map((s) => agentEvent(s, "online")));
-  console.log(`[sim] registered ${AGENTS.length} agents (device-A: 4+2, device-B: 4, ${comms.length} comm agents)`);
+  // register the full agent roster inside every workspace
+  for (const space of SPACES) {
+    await post(AGENTS.map((s) => agentEvent(s, "online", space)));
+  }
+  console.log(
+    `[sim] registered ${AGENTS.length} agents x ${SPACES.length} workspace(s) [${SPACES.join(", ")}] ` +
+      `(device-A: 4+2, device-B: 4, ${comms.length} comm agents)`
+  );
 }
 
 // ---- task lifecycle ----
@@ -155,6 +169,7 @@ const bWorkers = workers.filter((w) => w.device === devB);
 
 interface Task {
   id: string;
+  space: string;
   step: number;
   aWorker: Spec;
   aLeader: Spec;
@@ -169,6 +184,7 @@ function spawnTask(): Task {
   const aWorker = pick(aWorkers);
   return {
     id: `task-${taskSeq.toString(36)}-${rnd(1296).toString(36)}`,
+    space: pick(SPACES), // each task lives in one workspace
     step: 0,
     aWorker,
     aLeader: byId.get(aWorker.reportsTo!)!,
@@ -178,26 +194,27 @@ function spawnTask(): Task {
 
 function advance(task: Task): FlowEventInput[] {
   const t = task.id;
+  const sp = task.space;
   const a = (s: Spec) => fid(s.device, s.team, s.agent);
   switch (task.step++) {
     case 0:
-      return [message(task.aWorker, a(task.aLeader), "request", { task: pick(tasks), n: rnd(100) }, t)];
+      return [message(task.aWorker, a(task.aLeader), "request", { task: pick(tasks), n: rnd(100) }, t, sp)];
     case 1:
       return [
-        message(task.aLeader, a(aComm), "report", { team: task.aWorker.team, ready: true }, t),
-        bbWrite(task.aLeader, `bb:${task.aWorker.team}:plan`, { steps: rnd(5) + 1 }, t),
+        message(task.aLeader, a(aComm), "report", { team: task.aWorker.team, ready: true }, t, sp),
+        bbWrite(task.aLeader, `bb:${task.aWorker.team}:plan`, { steps: rnd(5) + 1 }, t, sp),
       ];
     case 2:
-      return [message(aComm, a(bComm), "sync", { taskId: t, handoff: true }, t)];
+      return [message(aComm, a(bComm), "sync", { taskId: t, handoff: true }, t, sp)];
     case 3:
       return [
-        message(bComm, a(task.bWorker), "assign", { slot: rnd(8) }, t),
-        bbRead(task.bWorker, `bb:${task.aWorker.team}:plan`, t),
+        message(bComm, a(task.bWorker), "assign", { slot: rnd(8) }, t, sp),
+        bbRead(task.bWorker, `bb:${task.aWorker.team}:plan`, t, sp),
       ];
     default:
       return [
-        message(task.bWorker, a(bComm), "result", { score: Math.random().toFixed(2) }, t),
-        bbWrite(bComm, `bb:result:${t}`, { ok: true }, t),
+        message(task.bWorker, a(bComm), "result", { score: Math.random().toFixed(2) }, t, sp),
+        bbWrite(bComm, `bb:result:${t}`, { ok: true }, t, sp),
       ];
   }
 }
@@ -216,10 +233,10 @@ function tick() {
     if (task.step > 4) active.splice(active.indexOf(task), 1);
   }
 
-  // occasional presence toggle (no taskId)
+  // occasional presence toggle (no taskId) in a random workspace
   if (Math.random() < 0.04) {
     const w = pick(workers);
-    batch.push(agentEvent(w, Math.random() < 0.5 ? "offline" : "online"));
+    batch.push(agentEvent(w, Math.random() < 0.5 ? "offline" : "online", pick(SPACES)));
   }
 
   if (batch.length) void post(batch);

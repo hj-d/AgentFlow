@@ -16,6 +16,8 @@ function reset() {
     tasks: {},
     tasksTotal: 0,
     selectedTask: null,
+    space: "default",
+    spaces: [],
     filters: { device: null, team: null, kind: "all", text: "" },
   });
 }
@@ -310,5 +312,37 @@ describe("store: tasks & scoped snapshot (scalability)", () => {
     expect(edges).toHaveLength(1);
     expect(edges[0].data).toEqual({ fresh: 1 });
     expect(useStore.getState().agents["d1/planner/a1"].role).toBe("leader");
+  });
+});
+
+describe("store: workspaces (isolation)", () => {
+  beforeEach(reset);
+
+  it("setSpaces records the workspace directory", () => {
+    useStore.getState().setSpaces([
+      { space: "alice", agents: 10, tasks: 3, lastTs: 5 },
+      { space: "bob", agents: 4, tasks: 1, lastTs: 9 },
+    ]);
+    expect(useStore.getState().spaces.map((s) => s.space)).toEqual(["alice", "bob"]);
+  });
+
+  it("joinSpace switches workspace, calls join(), and clears ALL prior state incl. agents", () => {
+    const joined: string[] = [];
+    useStore.getState().setJoin((sp) => joined.push(sp));
+    // populate some state in the current workspace
+    useStore.getState().ingest(agent({ agentId: "a1" }));
+    useStore.getState().ingest(msg());
+    useStore.getState().setTasks([{ taskId: "t1", firstTs: 1, lastTs: 1, count: 1, messages: 1, blackboard: 0, devices: ["d1"], agents: 1 }], 1);
+
+    useStore.getState().joinSpace("bob");
+
+    expect(joined).toEqual(["bob"]);
+    const s = useStore.getState();
+    expect(s.space).toBe("bob");
+    expect(s.agents).toEqual({}); // presence is per-space → cleared
+    expect(s.edges).toEqual({});
+    expect(s.events).toEqual([]);
+    expect(s.tasks).toEqual({});
+    expect(s.selectedTask).toBeNull();
   });
 });

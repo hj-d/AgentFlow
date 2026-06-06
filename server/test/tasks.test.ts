@@ -46,7 +46,7 @@ describe("Hub: task registry", () => {
     hub.ingest(msgEvt("t1", "d1"));
     hub.ingest(msgEvt("t1", "d2"));
     hub.ingest({ ...msgEvt("t1", "d1"), kind: "blackboard", op: "write", key: "k", value: 1 } as any);
-    expect(hub.taskCount).toBe(1);
+    expect(hub.taskCount()).toBe(1);
 
     const ws = new FakeWS();
     hub.addClient(ws as any);

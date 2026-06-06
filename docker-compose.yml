@@ -23,6 +23,7 @@ services:
     environment:
       - INGEST_URL=http://server:3001/ingest
       - SIM_INTERVAL_MS=350
+      - SPACES=alice,bob
     depends_on:
       - server
     profiles: ["demo"]

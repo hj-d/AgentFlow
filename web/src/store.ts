@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { FlowEvent, TaskSummary } from "./types";
+import type { FlowEvent, TaskSummary, SpaceSummary } from "./types";
 import { BLACKBOARD_ID } from "./types";
 
 export type AgentStatus = "online" | "offline";
@@ -45,6 +45,7 @@ export interface Filters {
 }
 
 export type SubscribeFn = (taskId: string | null) => void;
+export type JoinFn = (space: string) => void;
 
 const MAX_EVENTS = 500;
 const MAX_PULSES = 120;
@@ -63,10 +64,13 @@ interface State {
   tasks: Record<string, TaskSummary>;
   tasksTotal: number;
   selectedTask: string | null;
+  space: string; // current workspace being viewed
+  spaces: SpaceSummary[]; // directory of active workspaces
   filters: Filters;
 
-  /** Set by the ws layer; lets selectTask tell the server what to stream. */
+  /** Set by the ws layer; lets selectTask/joinSpace talk to the server. */
   subscribe: SubscribeFn;
+  join: JoinFn;
 
   setConnected: (c: boolean) => void;
   setPaused: (p: boolean) => void;
@@ -74,8 +78,11 @@ interface State {
   setShowEdgeData: (v: boolean) => void;
   setFilter: (f: Partial<Filters>) => void;
   setTasks: (tasks: TaskSummary[], total: number) => void;
+  setSpaces: (spaces: SpaceSummary[]) => void;
   setSubscribe: (fn: SubscribeFn) => void;
+  setJoin: (fn: JoinFn) => void;
   selectTask: (t: string | null) => void;
+  joinSpace: (space: string) => void;
   ingest: (e: FlowEvent) => void;
   ingestMany: (es: FlowEvent[]) => void;
   /** Replace all task-scoped derived state from a fresh server snapshot. */
@@ -133,8 +140,11 @@ export const useStore = create<State>((set) => ({
   tasks: {},
   tasksTotal: 0,
   selectedTask: null,
+  space: "default",
+  spaces: [],
   filters: { device: null, team: null, kind: "all", text: "" },
   subscribe: () => {},
+  join: () => {},
 
   setConnected: (c) => set({ connected: c }),
   setPaused: (p) => set({ paused: p }),
@@ -147,12 +157,30 @@ export const useStore = create<State>((set) => ({
       for (const t of tasks) map[t.taskId] = t;
       return { tasks: map, tasksTotal: total };
     }),
+  setSpaces: (spaces) => set({ spaces }),
   setSubscribe: (fn) => set({ subscribe: fn }),
+  setJoin: (fn) => set({ join: fn }),
   selectTask: (t) =>
     set((s) => {
       s.subscribe(t); // tell the server to (un)stream this task's detail
       // clear task-scoped derived state immediately; snapshot will repopulate
       return { selectedTask: t, edges: {}, pulses: [], events: [], blackboard: {} };
+    }),
+  joinSpace: (sp) =>
+    set((s) => {
+      s.join(sp); // tell the server to switch workspace
+      // workspace switch clears EVERYTHING (presence is per-space); snapshot repopulates
+      return {
+        space: sp,
+        selectedTask: null,
+        agents: {},
+        edges: {},
+        pulses: [],
+        events: [],
+        blackboard: {},
+        tasks: {},
+        tasksTotal: 0,
+      };
     }),
 
   ingest: (e) => set((s) => applyEvent(s, e)),

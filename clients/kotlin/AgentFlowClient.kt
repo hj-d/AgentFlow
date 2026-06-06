@@ -24,6 +24,7 @@ import java.net.URL
  */
 class AgentFlowClient(
     private val url: String,
+    private val space: String? = null,
     private val deviceId: String? = null,
     private val teamId: String? = null,
     private val batchSize: Int = 20,
@@ -54,6 +55,7 @@ class AgentFlowClient(
     /** Low-level: enqueue any event map. Never blocks on the network. */
     fun emit(event: Map<String, Any?>) {
         val e = HashMap(event)
+        if (e["space"] == null && space != null) e["space"] = space
         if (e["deviceId"] == null && deviceId != null) e["deviceId"] = deviceId
         if (e["teamId"] == null && teamId != null) e["teamId"] = teamId
         var full = false
