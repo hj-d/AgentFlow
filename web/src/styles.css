@@ -289,6 +289,52 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
+.tasks-head-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.chip.danger {
+  color: var(--red, #e06c75);
+}
+.task-del {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0;
+}
+.task-row:hover .task-del {
+  opacity: 1;
+}
+.task-del:hover {
+  color: var(--red, #e06c75);
+  background: var(--panel2);
+}
+.ws-del {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0.4;
+}
+.ws-item:hover .ws-del {
+  opacity: 1;
+}
+.ws-del:hover {
+  color: var(--red, #e06c75);
+  background: var(--bg, #11151f);
+}
 .hint {
   color: var(--muted);
   font-size: 11px;

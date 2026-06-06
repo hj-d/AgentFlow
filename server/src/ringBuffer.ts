@@ -14,6 +14,16 @@ export class RingBuffer<T> {
     return this.buf.slice();
   }
 
+  /** Drop every buffered item matching the predicate (used by task/space deletion). */
+  removeWhere(pred: (item: T) => boolean): void {
+    this.buf = this.buf.filter((item) => !pred(item));
+  }
+
+  /** Empty the buffer. */
+  clear(): void {
+    this.buf = [];
+  }
+
   get size(): number {
     return this.buf.length;
   }

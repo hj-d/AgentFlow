@@ -13,6 +13,8 @@ export function TaskList() {
   const total = useStore((s) => s.tasksTotal);
   const selected = useStore((s) => s.selectedTask);
   const selectTask = useStore((s) => s.selectTask);
+  const deleteTask = useStore((s) => s.deleteTask);
+  const clearSpace = useStore((s) => s.clearSpace);
 
   const list = useMemo(() => Object.values(tasks).sort((a, b) => b.lastTs - a.lastTs), [tasks]);
 
@@ -20,11 +22,24 @@ export function TaskList() {
     <div className="tasks">
       <div className="tasks-head">
         <span>{total} tasks</span>
-        {selected && (
-          <button className="chip" onClick={() => selectTask(null)}>
-            전체 보기 ✕
-          </button>
-        )}
+        <span className="tasks-head-actions">
+          {selected && (
+            <button className="chip" onClick={() => selectTask(null)}>
+              전체 보기 ✕
+            </button>
+          )}
+          {list.length > 0 && (
+            <button
+              className="chip danger"
+              title="이 워크스페이스의 task 전체 삭제"
+              onClick={() => {
+                if (confirm("이 워크스페이스의 task를 모두 삭제할까요?")) clearSpace();
+              }}
+            >
+              전체 삭제
+            </button>
+          )}
+        </span>
       </div>
       {list.length === 0 && <div className="empty small">task 없음</div>}
       {list.map((t) => (
@@ -40,6 +55,16 @@ export function TaskList() {
             <span className="badge blackboard">{t.blackboard}B</span>
             <span className="task-dev">{t.devices.length}dev</span>
             <span className="task-age">{age(t.lastTs)}</span>
+            <button
+              className="task-del"
+              title="이 task 삭제"
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteTask(t.taskId);
+              }}
+            >
+              ✕
+            </button>
           </span>
         </div>
       ))}

@@ -7,6 +7,7 @@ export function SpaceSwitcher() {
   const space = useStore((s) => s.space);
   const spaces = useStore((s) => s.spaces);
   const joinSpace = useStore((s) => s.joinSpace);
+  const deleteSpace = useStore((s) => s.deleteSpace);
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const ref = useRef<HTMLDivElement>(null);
@@ -62,6 +63,18 @@ export function SpaceSwitcher() {
                 <div key={n} className={"ws-item" + (n === space ? " cur" : "")} onClick={() => go(n)}>
                   <span className="ws-name">{n === space ? "● " : ""}{n}</span>
                   <span className="ws-count">{info ? `${info.agents}a / ${info.tasks}t` : "비어있음"}</span>
+                  {info && (
+                    <button
+                      className="ws-del"
+                      title="이 워크스페이스 삭제"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`워크스페이스 "${n}" 를 삭제할까요?`)) deleteSpace(n);
+                      }}
+                    >
+                      🗑
+                    </button>
+                  )}
                 </div>
               );
             })}

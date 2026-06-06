@@ -33,6 +33,10 @@ export function EventFeed() {
   const filtered = useMemo(() => {
     const text = filters.text.toLowerCase();
     return events.filter((e) => {
+      // Show ONLY the focused task's own actions. The store also holds global
+      // agent-presence events (needed to render the topology roster); those carry
+      // no taskId and would otherwise clutter this feed with unrelated online/offline noise.
+      if (selectedTask && e.taskId !== selectedTask) return false;
       if (filters.kind !== "all" && e.kind !== filters.kind) return false;
       if (filters.device && e.deviceId !== filters.device) return false;
       if (filters.team && e.teamId !== filters.team) return false;
@@ -42,7 +46,7 @@ export function EventFeed() {
       }
       return true;
     });
-  }, [events, filters]);
+  }, [events, filters, selectedTask]);
 
   if (!selectedTask) {
     return <div className="empty small">왼쪽에서 task를 선택하면 그 task의 이벤트가 표시됩니다.</div>;

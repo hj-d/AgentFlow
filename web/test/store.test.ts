@@ -326,6 +326,63 @@ describe("store: workspaces (isolation)", () => {
     expect(useStore.getState().spaces.map((s) => s.space)).toEqual(["alice", "bob"]);
   });
 
+  it("deleteTask drops the task locally and notifies the server", () => {
+    const sent: any[] = [];
+    useStore.getState().setControl((m) => sent.push(m));
+    useStore.getState().setTasks(
+      [
+        { taskId: "t1", firstTs: 1, lastTs: 1, count: 1, messages: 1, blackboard: 0, devices: ["d1"], agents: 1 },
+        { taskId: "t2", firstTs: 1, lastTs: 1, count: 1, messages: 1, blackboard: 0, devices: ["d1"], agents: 1 },
+      ],
+      2
+    );
+    useStore.getState().deleteTask("t1");
+    expect(Object.keys(useStore.getState().tasks)).toEqual(["t2"]);
+    expect(useStore.getState().tasksTotal).toBe(1);
+    expect(sent).toEqual([{ type: "deleteTask", taskId: "t1" }]);
+  });
+
+  it("deleteTask clears the focused-task view when the deleted task was selected", () => {
+    useStore.getState().setControl(() => {});
+    useStore.getState().setSubscribe(() => {});
+    useStore.getState().setTasks([{ taskId: "t1", firstTs: 1, lastTs: 1, count: 1, messages: 1, blackboard: 0, devices: ["d1"], agents: 1 }], 1);
+    useStore.getState().selectTask("t1");
+    useStore.getState().ingest(msg({ taskId: "t1" })); // create an edge under the focused task
+    expect(Object.keys(useStore.getState().edges).length).toBeGreaterThan(0);
+
+    useStore.getState().deleteTask("t1");
+    expect(useStore.getState().selectedTask).toBeNull();
+    expect(useStore.getState().edges).toEqual({});
+    expect(useStore.getState().events).toEqual([]);
+  });
+
+  it("clearSpace wipes tasks/events but keeps agents, and notifies the server", () => {
+    const sent: any[] = [];
+    useStore.getState().setControl((m) => sent.push(m));
+    useStore.getState().ingest(agent({ agentId: "a1" }));
+    useStore.getState().ingest(msg());
+    useStore.getState().setTasks([{ taskId: "t1", firstTs: 1, lastTs: 1, count: 1, messages: 1, blackboard: 0, devices: ["d1"], agents: 1 }], 1);
+
+    useStore.getState().clearSpace();
+    expect(useStore.getState().tasks).toEqual({});
+    expect(useStore.getState().tasksTotal).toBe(0);
+    expect(useStore.getState().events).toEqual([]);
+    expect(useStore.getState().agents["d1/planner/a1"]).toBeTruthy(); // roster kept
+    expect(sent).toEqual([{ type: "clearSpace" }]);
+  });
+
+  it("deleteSpace removes the workspace from the directory and notifies the server", () => {
+    const sent: any[] = [];
+    useStore.getState().setControl((m) => sent.push(m));
+    useStore.getState().setSpaces([
+      { space: "alice", agents: 1, tasks: 1, lastTs: 1 },
+      { space: "bob", agents: 1, tasks: 1, lastTs: 1 },
+    ]);
+    useStore.getState().deleteSpace("alice");
+    expect(useStore.getState().spaces.map((s) => s.space)).toEqual(["bob"]);
+    expect(sent).toEqual([{ type: "deleteSpace", space: "alice" }]);
+  });
+
   it("joinSpace switches workspace, calls join(), and clears ALL prior state incl. agents", () => {
     const joined: string[] = [];
     useStore.getState().setJoin((sp) => joined.push(sp));

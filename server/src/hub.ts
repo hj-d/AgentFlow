@@ -92,6 +92,12 @@ export class Hub {
       } else if (msg.type === "subscribeTask") {
         sub.taskId = msg.taskId;
         this.sendSnapshot(ws, sub);
+      } else if (msg.type === "deleteTask") {
+        this.deleteTask(sub.space, msg.taskId);
+      } else if (msg.type === "clearSpace") {
+        this.clearSpace(sub.space);
+      } else if (msg.type === "deleteSpace") {
+        this.deleteSpace(msg.space || sub.space);
       }
     });
     ws.on("close", () => this.clients.delete(ws));
@@ -134,6 +140,57 @@ export class Hub {
     else if (e.kind === "blackboard") t.blackboard++;
     t.devices.add(e.deviceId);
     t.agents.add(`${e.deviceId}/${e.teamId}/${e.agentId}`);
+  }
+
+  /** Remove a single task (summary + its buffered events) from a space. */
+  deleteTask(spaceName: string, taskId: string): void {
+    const st = this.spaces.get(spaceName);
+    if (!st || !st.tasks.delete(taskId)) return;
+    st.buffer.removeWhere((e) => e.taskId === taskId);
+    // un-focus any client currently viewing the deleted task
+    for (const [ws, sub] of this.clients) {
+      if (sub.space === spaceName && sub.taskId === taskId) {
+        sub.taskId = null;
+        this.sendSnapshot(ws, sub);
+      }
+    }
+    this.pushTasks(spaceName);
+  }
+
+  /** Wipe every task + buffered event in a space, keeping the agent roster (presence). */
+  clearSpace(spaceName: string): void {
+    const st = this.spaces.get(spaceName);
+    if (!st) return;
+    st.tasks.clear();
+    st.buffer.clear();
+    for (const [ws, sub] of this.clients) {
+      if (sub.space === spaceName) {
+        sub.taskId = null;
+        this.sendSnapshot(ws, sub); // re-sync: presence only, no tasks
+      }
+    }
+    this.pushTasks(spaceName);
+  }
+
+  /** Remove an entire workspace from the directory. Live traffic may recreate it. */
+  deleteSpace(spaceName: string): void {
+    if (!this.spaces.delete(spaceName)) return;
+    for (const [ws, sub] of this.clients) {
+      if (sub.space === spaceName && ws.readyState === ws.OPEN) {
+        sub.taskId = null;
+        this.send(ws, { type: "snapshot", events: [], space: spaceName, taskId: null });
+        this.send(ws, this.tasksMessage(spaceName));
+      }
+    }
+    this.broadcastAll(this.spacesMessage());
+  }
+
+  /** Push the current task list to every client viewing the given space (immediate sync). */
+  private pushTasks(spaceName: string): void {
+    const data = JSON.stringify(this.tasksMessage(spaceName));
+    for (const [ws, sub] of this.clients) {
+      if (sub.space === spaceName && ws.readyState === ws.OPEN) ws.send(data);
+    }
   }
 
   private tasksMessage(spaceName: string): ServerMessage {

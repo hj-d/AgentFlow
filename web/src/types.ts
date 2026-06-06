@@ -70,3 +70,9 @@ export type ServerMessage =
   | { type: "tasks"; tasks: TaskSummary[]; total: number }
   | { type: "spaces"; spaces: SpaceSummary[] }
   | { type: "stats"; connected: number; rate: number };
+
+/** client -> server control messages (delete/clear). Mirrors the server's ClientMessage. */
+export type ClientControl =
+  | { type: "deleteTask"; taskId: string }
+  | { type: "clearSpace" }
+  | { type: "deleteSpace"; space: string };

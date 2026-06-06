@@ -1,4 +1,4 @@
-import type { ServerMessage } from "../types";
+import type { ServerMessage, ClientControl } from "../types";
 import { useStore } from "../store";
 
 function wsUrl(): string {
@@ -29,8 +29,14 @@ export function connect(): () => void {
       ws.send(JSON.stringify({ type: "join", space }));
     }
   };
+  const sendControl = (msg: ClientControl) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  };
   useStore.getState().setSubscribe(sendSubscribe);
   useStore.getState().setJoin(sendJoin);
+  useStore.getState().setControl(sendControl);
   // reflect the URL's workspace as the current space (without re-sending derived state)
   useStore.setState({ space: spaceFromUrl() });
 

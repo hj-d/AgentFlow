@@ -103,4 +103,7 @@ export type ServerMessage =
 // client -> server
 export type ClientMessage =
   | { type: "join"; space: string } // switch the workspace this client is viewing
-  | { type: "subscribeTask"; taskId: string | null };
+  | { type: "subscribeTask"; taskId: string | null }
+  | { type: "deleteTask"; taskId: string } // drop one task from the client's current space
+  | { type: "clearSpace" } // wipe all tasks/events in the current space (presence kept)
+  | { type: "deleteSpace"; space: string }; // remove an entire workspace

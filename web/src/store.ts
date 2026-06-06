@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { FlowEvent, TaskSummary, SpaceSummary } from "./types";
+import type { FlowEvent, TaskSummary, SpaceSummary, ClientControl } from "./types";
 import { BLACKBOARD_ID } from "./types";
 
 export type AgentStatus = "online" | "offline";
@@ -46,6 +46,7 @@ export interface Filters {
 
 export type SubscribeFn = (taskId: string | null) => void;
 export type JoinFn = (space: string) => void;
+export type ControlFn = (msg: ClientControl) => void;
 
 const MAX_EVENTS = 500;
 const MAX_PULSES = 120;
@@ -68,9 +69,10 @@ interface State {
   spaces: SpaceSummary[]; // directory of active workspaces
   filters: Filters;
 
-  /** Set by the ws layer; lets selectTask/joinSpace talk to the server. */
+  /** Set by the ws layer; lets selectTask/joinSpace/delete talk to the server. */
   subscribe: SubscribeFn;
   join: JoinFn;
+  control: ControlFn;
 
   setConnected: (c: boolean) => void;
   setPaused: (p: boolean) => void;
@@ -81,8 +83,15 @@ interface State {
   setSpaces: (spaces: SpaceSummary[]) => void;
   setSubscribe: (fn: SubscribeFn) => void;
   setJoin: (fn: JoinFn) => void;
+  setControl: (fn: ControlFn) => void;
   selectTask: (t: string | null) => void;
   joinSpace: (space: string) => void;
+  /** Delete one task (server + local). */
+  deleteTask: (taskId: string) => void;
+  /** Clear all tasks/events in the current space (keeps the agent roster). */
+  clearSpace: () => void;
+  /** Delete an entire workspace from the directory. */
+  deleteSpace: (space: string) => void;
   ingest: (e: FlowEvent) => void;
   ingestMany: (es: FlowEvent[]) => void;
   /** Replace all task-scoped derived state from a fresh server snapshot. */
@@ -145,6 +154,7 @@ export const useStore = create<State>((set) => ({
   filters: { device: null, team: null, kind: "all", text: "" },
   subscribe: () => {},
   join: () => {},
+  control: () => {},
 
   setConnected: (c) => set({ connected: c }),
   setPaused: (p) => set({ paused: p }),
@@ -160,6 +170,7 @@ export const useStore = create<State>((set) => ({
   setSpaces: (spaces) => set({ spaces }),
   setSubscribe: (fn) => set({ subscribe: fn }),
   setJoin: (fn) => set({ join: fn }),
+  setControl: (fn) => set({ control: fn }),
   selectTask: (t) =>
     set((s) => {
       s.subscribe(t); // tell the server to (un)stream this task's detail
@@ -181,6 +192,32 @@ export const useStore = create<State>((set) => ({
         tasks: {},
         tasksTotal: 0,
       };
+    }),
+
+  deleteTask: (taskId) =>
+    set((s) => {
+      s.control({ type: "deleteTask", taskId });
+      const tasks = { ...s.tasks };
+      const existed = taskId in tasks;
+      delete tasks[taskId];
+      const wasSelected = s.selectedTask === taskId;
+      return {
+        tasks,
+        tasksTotal: Math.max(0, s.tasksTotal - (existed ? 1 : 0)),
+        // if the deleted task was focused, drop back to the all-tasks view
+        ...(wasSelected ? { selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {} } : {}),
+      };
+    }),
+  clearSpace: () =>
+    set((s) => {
+      s.control({ type: "clearSpace" });
+      // keep agents (presence is re-sent by the server snapshot); drop everything task-scoped
+      return { tasks: {}, tasksTotal: 0, selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {} };
+    }),
+  deleteSpace: (space) =>
+    set((s) => {
+      s.control({ type: "deleteSpace", space });
+      return { spaces: s.spaces.filter((x) => x.space !== space) };
     }),
 
   ingest: (e) => set((s) => applyEvent(s, e)),
