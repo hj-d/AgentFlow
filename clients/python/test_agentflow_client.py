@@ -77,12 +77,22 @@ class TestBatching(unittest.TestCase):
         self.assertEqual(off["status"], "offline")
         self.assertNotIn("role", off)
 
-    def test_to_none_is_preserved(self):
-        # broadcast: to=None must survive (not dropped) so the collector accepts it
+    def test_emit_to_none_is_preserved(self):
+        # low-level emit() must not strip an explicit to=None
         af, batches = capturing_client(device_id="d1", team_id="t", batch_size=1)
         af.emit({"kind": "message", "agentId": "a", "from": "a", "to": None})
         self.assertIn("to", batches[0][0])
         self.assertIsNone(batches[0][0]["to"])
+
+    def test_message_broadcast_keeps_to_key(self):
+        # message(to=None) is a broadcast: the 'to' key must survive _drop_none,
+        # otherwise the collector rejects the event (it requires the key to exist).
+        af, batches = capturing_client(device_id="d1", team_id="t", batch_size=1)
+        af.message(agent_id="a", frm="a", to=None, msg_type="broadcast")
+        e = batches[0][0]
+        self.assertIn("to", e)
+        self.assertIsNone(e["to"])
+        self.assertEqual(e["msgType"], "broadcast")
 
 
 class TestFailureHandling(unittest.TestCase):

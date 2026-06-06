@@ -1,8 +1,6 @@
 // Mirror of the server's event model (kept in sync manually).
-export type EventKind = "message" | "blackboard" | "agent";
 
-/** Reserved node ids for the shared infrastructure (rendered as backbone nodes). */
-export const MESSAGE_SERVER_ID = "__message_server__";
+/** Reserved node id for the shared blackboard (rendered as a backbone node). */
 export const BLACKBOARD_ID = "__blackboard__";
 
 export interface FlowEventBase {

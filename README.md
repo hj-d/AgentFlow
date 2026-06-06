@@ -36,6 +36,9 @@ cd web && npm install && npm run dev      # http://localhost:8080
 cd server && npm run sim
 ```
 
+> 데모 트래픽은 눈으로 따라가기 쉽게 **천천히** 흐른다. 속도/양은 환경변수로 조절:
+> `SIM_INTERVAL_MS`(스텝 간격, 기본 1500) · `SIM_MAX_ACTIVE`(동시 task, 기본 2) · `SIM_SPAWN_PROB`(생성 확률, 기본 0.25) · `SPACES`(워크스페이스 목록).
+
 ## 포트
 
 | 서비스 | 포트 |
@@ -104,7 +107,7 @@ SDK 없이 직접 POST 하려면 아래 스키마대로 보내면 된다.
   kind: "message",
   deviceId, teamId, agentId,        // 보내는 주체
   from: "device/team/agent",
-  to:   "device/team/agent" | topic | "broadcast",
+  to:   "device/team/agent" | topic | null,   // null = broadcast. 키는 항상 존재해야 함
   op: "send" | "deliver",
   msgType?, tool?, traceId?, correlationId?,
   body?: <실제 페이로드>             // UI에 그대로 표시됨
@@ -157,14 +160,14 @@ def emit(event):
 
 ## UI 구성
 
-- **Topology**: 상단에 공유 인프라 백본 노드 **Message Server**(파랑) / **Blackboard**(노랑).
-  아래로 Device(큰 박스) → Team(점선 박스) → Agent(원).
-  - 에이전트는 `online` 이벤트로 **시작 시 바로 생성**되고, `offline`이면 회색으로 표시.
-  - 메시지: sender → **Message Server** → recipient (파란 점), 블랙보드 write: agent → **Blackboard**(노랑), read: **Blackboard** → agent(초록)로 흐름 애니메이션.
-- **Live Events**: 시간순 이벤트 스트림. 행 클릭 시 해당 `traceId`만 필터(흐름 추적).
+- **Topology**: 상단 중앙에 공유 인프라 백본 노드 **Blackboard**. 아래로 Device(큰 박스) → Team(점선 박스) → Agent(원).
+  - 에이전트는 `online` 이벤트로 **시작 시 바로 생성**되고, `offline`이면 회색으로 표시. `comm`(금색 링 · ✦) / `leader`(흰 링 · ★) 역할이 강조됨.
+  - 메시지는 sender → recipient **직접 엣지**(움직이는 점 + 최근 데이터 라벨), 블랙보드 write는 agent → **Blackboard**, read는 **Blackboard** → agent 흐름으로 애니메이션.
+- **Tasks**: 현재 워크스페이스의 task 요약 목록(메시지/블랙보드 수, device 수, 갱신 시각). 클릭하면 그 **task의 흐름만** Topology·Live Events에 표시. 각 행의 ✕로 task를 삭제하고, 헤더의 **전체 삭제**로 워크스페이스의 task를 한 번에 비움.
+- **Live Events**: **선택한 task의 이벤트만** 시간순 스트림(메시지/블랙보드 payload 포함). task 미선택 시 안내만 표시.
 - **Blackboard**: 현재 key별 값/버전/읽기 횟수/갱신 시각.
-- 상단: 연결 상태, 초당 이벤트율, 일시정지(스냅샷), trace 필터 해제.
-- 필터바: device / team / kind / 페이로드 검색.
+- **상단바**: 워크스페이스 드롭다운(전환·생성·🗑 삭제), 연결 상태, 초당 이벤트율, 일시정지(스냅샷), 선택 task 해제.
+- **필터바**: device / team / kind / 페이로드 검색 + 엣지 데이터 라벨 토글.
 
 ## 구조
 
@@ -177,9 +180,9 @@ clients/   드롭인 SDK (ts/, python/, rust/, kotlin/) + 가이드(README.md).
 ## 테스트
 
 ```bash
-cd server && npm test                       # 44 tests (ringbuffer/ingest/hub/통합/SDK)
-cd web && npm test                          # 21 tests (store 로직: 라이프사이클·인프라 라우팅)
-cd clients/python && python3 -m unittest    # 11 tests (Python SDK)
+cd server && npm test                       # 63 tests (ringbuffer/ingest/hub/tasks/spaces/delete/통합)
+cd web && npm test                          # 44 tests (store 로직: 라이프사이클·라우팅·task/space 삭제)
+cd clients/python && python3 -m unittest    # 12 tests (Python SDK)
 ```
 
 ## 확장 여지 (필요 시)

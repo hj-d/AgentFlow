@@ -1,10 +1,7 @@
 // Unified flow-event model shared conceptually with the web client.
 // Both the message server and the blackboard are normalized into FlowEvent.
 
-export type EventKind = "message" | "blackboard" | "agent";
-
-/** Reserved node ids for the shared infrastructure (rendered as backbone nodes). */
-export const MESSAGE_SERVER_ID = "__message_server__";
+/** Reserved node id for the shared blackboard (rendered as a backbone node). */
 export const BLACKBOARD_ID = "__blackboard__";
 
 /** Default workspace when a producer/client doesn't specify one. */

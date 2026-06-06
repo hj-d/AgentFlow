@@ -4,5 +4,11 @@ dist/
 .DS_Store
 .env
 
+# build artifacts
+__pycache__/
+*.pyc
+target/
+*.jar
+
 # local Claude Code settings
 .claude/

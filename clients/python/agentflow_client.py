@@ -132,26 +132,27 @@ class AgentFlowClient:
         trace_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
     ) -> None:
-        self.emit(
-            _drop_none(
-                {
-                    "kind": "message",
-                    "deviceId": device_id,
-                    "teamId": team_id,
-                    "agentId": agent_id,
-                    "op": op,
-                    "from": frm,
-                    "to": to,
-                    "msgType": msg_type,
-                    "body": body,
-                    "size": size,
-                    "tool": tool,
-                    "taskId": task_id,
-                    "traceId": trace_id,
-                    "correlationId": correlation_id,
-                }
-            )
+        event = _drop_none(
+            {
+                "kind": "message",
+                "deviceId": device_id,
+                "teamId": team_id,
+                "agentId": agent_id,
+                "op": op,
+                "from": frm,
+                "msgType": msg_type,
+                "body": body,
+                "size": size,
+                "tool": tool,
+                "taskId": task_id,
+                "traceId": trace_id,
+                "correlationId": correlation_id,
+            }
         )
+        # 'to' must always be present (None = broadcast); the collector requires the
+        # key to exist, so it bypasses _drop_none which would otherwise strip None.
+        event["to"] = to
+        self.emit(event)
 
     def blackboard_write(
         self,

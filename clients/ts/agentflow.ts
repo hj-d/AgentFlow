@@ -13,7 +13,7 @@
  *   await af.close(); // flush + stop on shutdown
  */
 
-export type EventKind = "message" | "blackboard";
+export type EventKind = "message" | "blackboard" | "agent";
 
 export interface MessageEventInput {
   kind: "message";
