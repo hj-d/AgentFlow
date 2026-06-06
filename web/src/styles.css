@@ -51,22 +51,82 @@ body {
   color: var(--accent);
 }
 .space-switcher {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
 }
-.space-switcher .ws-label {
+.ws-btn {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.ws-btn b {
+  color: var(--accent);
+}
+.ws-btn .caret {
+  color: var(--muted);
+  margin-left: 2px;
+}
+.ws-menu {
+  position: absolute;
+  top: 110%;
+  left: 0;
+  z-index: 50;
+  width: 260px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+}
+.ws-search {
+  width: 100%;
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  margin-bottom: 6px;
+}
+.ws-items {
+  max-height: 260px;
+  overflow: auto;
+}
+.ws-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ws-item:hover {
+  background: var(--panel2);
+}
+.ws-item.cur {
+  background: #1d2536;
+}
+.ws-name {
+  color: var(--accent);
+}
+.ws-item.create {
+  color: var(--green);
+}
+.ws-count {
   color: var(--muted);
   font-size: 11px;
 }
-.space-switcher input {
-  background: var(--panel2);
-  color: var(--accent);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font: inherit;
-  width: 150px;
+.ws-empty {
+  color: var(--muted);
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
 }
 .status {
   display: flex;
