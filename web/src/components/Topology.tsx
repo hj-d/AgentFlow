@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "../store";
+import { useStore, ACTIVITY_TTL_MS } from "../store";
 import type { AgentNode, EdgeState, PulseFlow } from "../store";
 import { BLACKBOARD_ID } from "../types";
 
@@ -170,6 +170,7 @@ export function Topology() {
   const bbSeen = useStore((s) => s.bbSeen);
   const expirePulses = useStore((s) => s.expirePulses);
   const expireEdges = useStore((s) => s.expireEdges);
+  const expireActivity = useStore((s) => s.expireActivity);
   const [, force] = useState(0);
   const raf = useRef<number>(0);
 
@@ -177,12 +178,13 @@ export function Topology() {
     const loop = () => {
       expirePulses(performance.now());
       expireEdges(Date.now());
+      expireActivity(Date.now());
       force((n) => (n + 1) % 1_000_000);
       raf.current = requestAnimationFrame(loop);
     };
     raf.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf.current);
-  }, [expirePulses, expireEdges]);
+  }, [expirePulses, expireEdges, expireActivity]);
 
   const agentList = useMemo(() => Object.values(agents), [agents]);
   const layout = useMemo(() => computeLayout(agentList), [agentList]);
@@ -264,14 +266,19 @@ export function Topology() {
           if (!p) return null;
           const active = recentlyActive.has(a.id);
           const offline = a.status === "offline";
+          const busy = !offline && a.activity && wall - a.activity.ts < ACTIVITY_TTL_MS;
           const isComm = a.role === "comm";
           const isLeader = a.role === "leader";
           const isCoord = isComm || isLeader;
           const r = isComm ? 22 : isLeader ? 20 : AGENT_R;
           return (
             <g key={a.id} transform={`translate(${p.x},${p.y})`} opacity={offline ? 0.4 : 1}>
-              <title>{`${a.id}\nrole: ${a.role ?? "agent"} — ${a.status}`}</title>
+              <title>
+                {`${a.id}\nrole: ${a.role ?? "agent"} — ${a.status}` + (busy ? `\n⚙ using: ${a.activity!.tool}` : "")}
+              </title>
               {isCoord && <circle r={r + 4} className={"agent-ring " + a.role} fill="none" />}
+              {/* busy halo — animated dashed ring shows the agent is actively working */}
+              {busy && <circle r={r + 7} className="agent-working" fill="none" />}
               <circle
                 r={r}
                 className={"agent" + (active ? " active" : "") + (offline ? " offline" : "")}
@@ -288,6 +295,12 @@ export function Topology() {
               {isCoord && (
                 <text y={r + 24} textAnchor="middle" className={"agent-role " + a.role}>
                   {isComm ? "comm" : "leader"}
+                </text>
+              )}
+              {/* current tool label above the node — answers "what is it doing right now" */}
+              {busy && (
+                <text y={-r - 12} textAnchor="middle" className="agent-tool">
+                  ⚙ {a.activity!.tool}
                 </text>
               )}
             </g>

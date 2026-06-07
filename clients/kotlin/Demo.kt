@@ -16,6 +16,8 @@ fun main() {
     af.blackboardWrite(agentId = "lead", key = "bb:gamma:plan",
         value = mapOf("steps" to 4), taskId = task)
     af.blackboardRead(agentId = "w1", key = "bb:gamma:plan", taskId = task)
+    af.tool(agentId = "w1", tool = "search", phase = "start", taskId = task) // w1 busy
+    af.tool(agentId = "w1", tool = "search", phase = "end", status = "ok", taskId = task)
 
     af.close()
     println("sent demo events for $task")

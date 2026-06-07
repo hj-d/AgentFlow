@@ -10,6 +10,7 @@
   --bb: #d29922;
   --green: #3fb950;
   --red: #f85149;
+  --tool: #a371f7;
 }
 
 * {
@@ -390,6 +391,27 @@ body {
   fill: var(--muted);
   font-size: 10px;
 }
+/* busy indicator — a rotating dashed ring while an agent is using a tool */
+.agent-working {
+  stroke: var(--tool);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  filter: drop-shadow(0 0 4px var(--tool));
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: spin 2.4s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.agent-tool {
+  fill: var(--tool);
+  font-size: 9px;
+  font-weight: 700;
+  pointer-events: none;
+}
 .edge {
   stroke: var(--accent);
   stroke-width: 1.5;
@@ -543,6 +565,10 @@ svg .infra-box {
 .badge.agent {
   background: rgba(63, 185, 80, 0.18);
   color: var(--green);
+}
+.badge.tool {
+  background: rgba(163, 113, 247, 0.18);
+  color: var(--tool);
 }
 .summary {
   color: var(--text);

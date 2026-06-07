@@ -13,7 +13,7 @@
  *   await af.close(); // flush + stop on shutdown
  */
 
-export type EventKind = "message" | "blackboard" | "agent";
+export type EventKind = "message" | "blackboard" | "agent" | "tool";
 
 export interface MessageEventInput {
   kind: "message";
@@ -70,7 +70,25 @@ export interface AgentEventInput {
   eventId?: string;
 }
 
-export type FlowEventInput = MessageEventInput | BlackboardEventInput | AgentEventInput;
+export interface ToolEventInput {
+  kind: "tool";
+  deviceId: string;
+  teamId: string;
+  agentId: string;
+  tool: string;
+  phase?: "start" | "end";
+  status?: "ok" | "error";
+  summary?: string;
+  space?: string;
+  taskId?: string;
+  traceId?: string;
+  correlationId?: string;
+  causedBy?: string;
+  ts?: number;
+  eventId?: string;
+}
+
+export type FlowEventInput = MessageEventInput | BlackboardEventInput | AgentEventInput | ToolEventInput;
 
 type FetchLike = (
   url: string,
@@ -168,6 +186,13 @@ export class AgentFlowClient {
     }
   ): void {
     this.emit({ kind: "blackboard", op: "read", ...e } as BlackboardEventInput);
+  }
+
+  /** Record a tool invocation. Use phase "start"/"end" to bracket long-running tools
+   *  so the UI can show the agent as busy meanwhile; a single call (default "start")
+   *  is enough for a quick tool and the busy state expires on its own. */
+  tool(e: Omit<ToolEventInput, "kind" | "deviceId" | "teamId"> & { deviceId?: string; teamId?: string }): void {
+    this.emit({ kind: "tool", ...e } as ToolEventInput);
   }
 
   /** Send everything queued now. Resolves even on failure (re-queues batch). */

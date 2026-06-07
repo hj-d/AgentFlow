@@ -18,6 +18,7 @@ import java.net.URL
  * af.message(agentId = "a1", from = "a1", to = "a2", msgType = "task", taskId = "t-1", body = mapOf("n" to 1))
  * af.blackboardWrite(agentId = "a1", key = "bb:plan", value = mapOf("step" to 2), taskId = "t-1")
  * af.blackboardRead(agentId = "a2", key = "bb:plan", taskId = "t-1")
+ * af.tool(agentId = "a2", tool = "search", phase = "start", taskId = "t-1")
  * af.offline(agentId = "a1")
  * af.close()  // flush + stop on shutdown
  * ```
@@ -115,6 +116,25 @@ class AgentFlowClient(
         teamId: String? = null, deviceId: String? = null,
         taskId: String? = null, traceId: String? = null,
     ) = emit(noNulls("kind" to "blackboard", "op" to "read", "agentId" to agentId, "key" to key,
+        "teamId" to teamId, "deviceId" to deviceId, "taskId" to taskId, "traceId" to traceId))
+
+    /**
+     * Record a tool invocation (shown as a busy ring + ⚙ label on the agent node).
+     * Bracket long-running tools with [phase] "start"/"end"; a single call (default
+     * "start") suffices for a quick tool — the busy state expires on its own.
+     */
+    fun tool(
+        agentId: String,
+        tool: String,
+        phase: String? = null,
+        status: String? = null,
+        summary: String? = null,
+        teamId: String? = null,
+        deviceId: String? = null,
+        taskId: String? = null,
+        traceId: String? = null,
+    ) = emit(noNulls("kind" to "tool", "agentId" to agentId, "tool" to tool,
+        "phase" to phase, "status" to status, "summary" to summary,
         "teamId" to teamId, "deviceId" to deviceId, "taskId" to taskId, "traceId" to traceId))
 
     /** Send everything queued now (also runs on the background timer). */

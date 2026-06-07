@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useStore, EDGE_TTL_MS } from "../src/store";
+import { useStore, EDGE_TTL_MS, ACTIVITY_TTL_MS } from "../src/store";
 import type { FlowEvent } from "../src/types";
 import { BLACKBOARD_ID } from "../src/types";
 
@@ -9,6 +9,7 @@ function reset() {
     paused: false,
     rate: 0,
     events: [],
+    replayQueue: [],
     agents: {},
     blackboard: {},
     pulses: [],
@@ -63,6 +64,22 @@ function agent(over: Partial<Extract<FlowEvent, { kind: "agent" }>> = {}): FlowE
     ...over,
   };
 }
+function tool(over: Partial<Extract<FlowEvent, { kind: "tool" }>> = {}): FlowEvent {
+  return {
+    kind: "tool",
+    eventId: "tl" + seq++,
+    ts: 1000 + seq,
+    deviceId: "d1",
+    teamId: "planner",
+    agentId: "a1",
+    tool: "search",
+    ...over,
+  };
+}
+/** loadSnapshot now stages events into replayQueue for staggered playback; apply them all. */
+function drainReplay() {
+  while (useStore.getState().replayQueue.length) useStore.getState().replayNext();
+}
 
 describe("store: agents", () => {
   beforeEach(reset);
@@ -111,6 +128,54 @@ describe("store: agent lifecycle", () => {
     const node = useStore.getState().agents["d1/planner/a1"];
     expect(node.role).toBe("critic");
     expect(node.status).toBe("online");
+  });
+});
+
+describe("store: tool use → agent activity", () => {
+  beforeEach(reset);
+
+  it("a tool event marks the acting agent busy with that tool", () => {
+    useStore.getState().ingest(tool({ tool: "python" }));
+    const node = useStore.getState().agents["d1/planner/a1"];
+    expect(node.activity).toMatchObject({ tool: "python" });
+  });
+
+  it("phase 'end' clears the busy state", () => {
+    useStore.getState().ingest(tool({ tool: "python", phase: "start" }));
+    expect(useStore.getState().agents["d1/planner/a1"].activity).toBeTruthy();
+    useStore.getState().ingest(tool({ tool: "python", phase: "end" }));
+    expect(useStore.getState().agents["d1/planner/a1"].activity).toBeUndefined();
+  });
+
+  it("the latest tool wins while busy", () => {
+    useStore.getState().ingest(tool({ tool: "search" }));
+    useStore.getState().ingest(tool({ tool: "browser" }));
+    expect(useStore.getState().agents["d1/planner/a1"].activity!.tool).toBe("browser");
+  });
+
+  it("busy state survives a later non-tool event from the same agent", () => {
+    useStore.getState().ingest(tool({ tool: "sql" }));
+    useStore.getState().ingest(msg()); // a1 sends a message while still "working"
+    expect(useStore.getState().agents["d1/planner/a1"].activity!.tool).toBe("sql");
+  });
+
+  it("a tool event creates no pulse or edge (it's self-action, not transit)", () => {
+    useStore.getState().ingest(tool({ tool: "python" }));
+    expect(useStore.getState().pulses).toHaveLength(0);
+    expect(Object.keys(useStore.getState().edges)).toHaveLength(0);
+  });
+
+  it("the tool event still lands in the event feed list", () => {
+    useStore.getState().ingest(tool({ tool: "python" }));
+    expect(useStore.getState().events[0]).toMatchObject({ kind: "tool", tool: "python" });
+  });
+
+  it("expireActivity clears activity older than the TTL but keeps fresh ones", () => {
+    useStore.getState().ingest(tool({ tool: "python", ts: 1000 }));
+    useStore.getState().expireActivity(1000 + ACTIVITY_TTL_MS - 1); // still fresh
+    expect(useStore.getState().agents["d1/planner/a1"].activity).toBeTruthy();
+    useStore.getState().expireActivity(1000 + ACTIVITY_TTL_MS + 1); // stale
+    expect(useStore.getState().agents["d1/planner/a1"].activity).toBeUndefined();
   });
 });
 
@@ -238,14 +303,15 @@ describe("store: blackboard", () => {
     expect(useStore.getState().bbSeen).toBe(true);
   });
 
-  it("bbSeen resets on workspace switch and is rebuilt from the snapshot", () => {
+  it("bbSeen resets on workspace switch and is rebuilt from the (replayed) snapshot", () => {
     useStore.getState().setJoin(() => {});
     useStore.getState().ingest(bb({ key: "k", value: 1 }));
     expect(useStore.getState().bbSeen).toBe(true);
     useStore.getState().joinSpace("other");
     expect(useStore.getState().bbSeen).toBe(false); // fresh space hides the bb node
-    // a snapshot that contains a blackboard event reveals it again
+    // a snapshot that contains a blackboard event reveals it again — once replayed
     useStore.getState().loadSnapshot([bb({ key: "k2", value: 2 })]);
+    drainReplay();
     expect(useStore.getState().bbSeen).toBe(true);
   });
 });
@@ -324,14 +390,27 @@ describe("store: tasks & scoped snapshot (scalability)", () => {
     expect(useStore.getState().events).toEqual([]);
   });
 
-  it("loadSnapshot replaces flows but keeps agent presence", () => {
+  it("loadSnapshot stages a fresh snapshot for replay; draining rebuilds flows", () => {
     useStore.getState().ingest(msg({ from: "d1/planner/a1", to: "d1/planner/a2", body: { old: 1 } }));
-    // snapshot: presence + a fresh task flow
+    // snapshot: presence + a fresh task flow — staged, prior flows already cleared
     useStore.getState().loadSnapshot([agent({ agentId: "a1", role: "leader" }), msg({ body: { fresh: 1 } })]);
+    expect(useStore.getState().replayQueue).toHaveLength(2);
+    expect(Object.values(useStore.getState().edges)).toHaveLength(0); // not applied yet
+    drainReplay();
     const edges = Object.values(useStore.getState().edges);
     expect(edges).toHaveLength(1);
     expect(edges[0].data).toEqual({ fresh: 1 });
     expect(useStore.getState().agents["d1/planner/a1"].role).toBe("leader");
+  });
+
+  it("loadSnapshot applies events older than the replay window instantly as a backdrop", () => {
+    // build a snapshot larger than the replay window (40): the oldest are applied at once
+    const big: FlowEvent[] = [];
+    for (let i = 0; i < 45; i++) big.push(msg({ body: { i } }));
+    useStore.getState().loadSnapshot(big);
+    // 45 - 40 = 5 applied immediately, the newest 40 queued
+    expect(useStore.getState().replayQueue).toHaveLength(40);
+    expect(useStore.getState().events).toHaveLength(5);
   });
 });
 

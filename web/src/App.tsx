@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { connect } from "./lib/ws";
-import { useStore } from "./store";
+import { useStore, REPLAY_INTERVAL_MS } from "./store";
 import { Topology } from "./components/Topology";
 import { EventFeed } from "./components/EventFeed";
 import { BlackboardPanel } from "./components/BlackboardPanel";
@@ -17,6 +17,16 @@ export default function App() {
   const selectTask = useStore((s) => s.selectTask);
 
   useEffect(() => connect(), []);
+
+  // Drain the snapshot replay queue one event at a time so the topology builds
+  // up visibly instead of all-at-once. No-ops while the queue is empty.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const s = useStore.getState();
+      if (s.replayQueue.length) s.replayNext();
+    }, REPLAY_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="app">

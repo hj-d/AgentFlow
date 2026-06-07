@@ -28,6 +28,14 @@ const validAgent = {
   role: "worker",
 };
 
+const validTool = {
+  kind: "tool",
+  deviceId: "d1",
+  teamId: "planner",
+  agentId: "a1",
+  tool: "search",
+};
+
 describe("isValidInput", () => {
   it("accepts a well-formed message", () => {
     expect(isValidInput(validMessage)).toBe(true);
@@ -40,6 +48,18 @@ describe("isValidInput", () => {
   it("accepts a well-formed agent lifecycle event (online/offline)", () => {
     expect(isValidInput(validAgent)).toBe(true);
     expect(isValidInput({ ...validAgent, status: "offline" })).toBe(true);
+  });
+
+  it("accepts a well-formed tool event", () => {
+    expect(isValidInput(validTool)).toBe(true);
+    expect(isValidInput({ ...validTool, phase: "start" })).toBe(true);
+    expect(isValidInput({ ...validTool, phase: "end", status: "ok" })).toBe(true);
+  });
+
+  it("rejects a tool event missing the tool name", () => {
+    const { tool, ...noTool } = validTool;
+    expect(isValidInput(noTool)).toBe(false);
+    expect(isValidInput({ ...validTool, tool: "" })).toBe(false);
   });
 
   it("rejects an agent event with an invalid/missing status", () => {
@@ -118,9 +138,9 @@ describe("ingestBatch", () => {
     expect(out.map((e) => e.kind)).toEqual(["message", "blackboard"]);
   });
 
-  it("accepts a mixed batch of all three kinds", () => {
-    const out = ingestBatch([validAgent, validMessage, validBlackboard], 1);
-    expect(out.map((e) => e.kind)).toEqual(["agent", "message", "blackboard"]);
+  it("accepts a mixed batch of all four kinds", () => {
+    const out = ingestBatch([validAgent, validMessage, validBlackboard, validTool], 1);
+    expect(out.map((e) => e.kind)).toEqual(["agent", "message", "blackboard", "tool"]);
   });
 
   it("returns empty for fully invalid input", () => {

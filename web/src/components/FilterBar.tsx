@@ -34,6 +34,7 @@ export function FilterBar() {
         <option value="all">all events</option>
         <option value="message">messages</option>
         <option value="blackboard">blackboard</option>
+        <option value="tool">tool use</option>
         <option value="agent">agent lifecycle</option>
       </select>
       <input

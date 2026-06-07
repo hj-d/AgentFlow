@@ -15,6 +15,7 @@ interface TaskAgg {
   count: number;
   messages: number;
   blackboard: number;
+  tools: number;
   devices: Set<string>;
   agents: Set<string>;
 }
@@ -131,13 +132,14 @@ export class Hub {
     const id = e.taskId!;
     let t = st.tasks.get(id);
     if (!t) {
-      t = { taskId: id, firstTs: e.ts, lastTs: e.ts, count: 0, messages: 0, blackboard: 0, devices: new Set(), agents: new Set() };
+      t = { taskId: id, firstTs: e.ts, lastTs: e.ts, count: 0, messages: 0, blackboard: 0, tools: 0, devices: new Set(), agents: new Set() };
       st.tasks.set(id, t);
     }
     t.lastTs = e.ts;
     t.count++;
     if (e.kind === "message") t.messages++;
     else if (e.kind === "blackboard") t.blackboard++;
+    else if (e.kind === "tool") t.tools++;
     t.devices.add(e.deviceId);
     t.agents.add(`${e.deviceId}/${e.teamId}/${e.agentId}`);
   }
@@ -206,6 +208,7 @@ export class Hub {
         count: t.count,
         messages: t.messages,
         blackboard: t.blackboard,
+        tools: t.tools,
         devices: [...t.devices],
         agents: t.agents.size,
       }));

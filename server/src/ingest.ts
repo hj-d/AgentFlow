@@ -5,7 +5,7 @@ import type { FlowEvent, FlowEventInput } from "./types.js";
 export function isValidInput(raw: unknown): raw is FlowEventInput {
   if (!raw || typeof raw !== "object") return false;
   const e = raw as Record<string, unknown>;
-  if (e.kind !== "message" && e.kind !== "blackboard" && e.kind !== "agent") return false;
+  if (e.kind !== "message" && e.kind !== "blackboard" && e.kind !== "agent" && e.kind !== "tool") return false;
   if (typeof e.deviceId !== "string" || !e.deviceId) return false;
   if (typeof e.teamId !== "string" || !e.teamId) return false;
   if (typeof e.agentId !== "string" || !e.agentId) return false;
@@ -17,6 +17,8 @@ export function isValidInput(raw: unknown): raw is FlowEventInput {
   } else if (e.kind === "blackboard") {
     if (typeof e.op !== "string") return false;
     if (typeof e.key !== "string" || !e.key) return false;
+  } else if (e.kind === "tool") {
+    if (typeof e.tool !== "string" || !e.tool) return false;
   } else {
     // agent lifecycle
     if (e.status !== "online" && e.status !== "offline") return false;

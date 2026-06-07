@@ -210,6 +210,38 @@ class AgentFlowClient:
             )
         )
 
+    def tool(
+        self,
+        agent_id: str,
+        tool: str,
+        phase: Optional[str] = None,
+        status: Optional[str] = None,
+        summary: Optional[str] = None,
+        team_id: Optional[str] = None,
+        device_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Record a tool invocation. Pass phase="start"/"end" to bracket long-running
+        tools so the UI shows the agent busy meanwhile; a single call is fine for a
+        quick tool (the busy state expires on its own)."""
+        self.emit(
+            _drop_none(
+                {
+                    "kind": "tool",
+                    "deviceId": device_id,
+                    "teamId": team_id,
+                    "agentId": agent_id,
+                    "tool": tool,
+                    "phase": phase,
+                    "status": status,
+                    "summary": summary,
+                    "taskId": task_id,
+                    "traceId": trace_id,
+                }
+            )
+        )
+
     def flush(self) -> None:
         with self._lock:
             if not self._queue:

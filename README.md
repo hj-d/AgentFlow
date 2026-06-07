@@ -74,8 +74,10 @@ af.message({ teamId, agentId: from, from, to, msgType, traceId, body });
 // 3) 블랙보드 write / read 지점에서  ([Blackboard] 노드를 거쳐 시각화)
 af.blackboardWrite({ teamId, agentId, key, value, traceId });
 af.blackboardRead({ teamId, agentId, key, traceId });
+// 4) 도구 호출 지점에서  (노드에 ⚙ 도구 라벨 + 보라색 "작업 중" 링)
+af.tool({ teamId, agentId, tool: "search", phase: "start", taskId });
 
-// 4) 에이전트 종료 시
+// 5) 에이전트 종료 시
 af.offline({ teamId, agentId });
 await af.close(); // 종료 시 flush
 ```
@@ -86,6 +88,7 @@ af = AgentFlowClient(url="http://collector:3001/ingest", device_id="edge-1")
 af.message(team_id=team, agent_id=src, frm=src, to=dst, msg_type="task", trace_id=tid, body={"x": 1})
 af.blackboard_write(team_id=team, agent_id=a, key=k, value=v, trace_id=tid)
 af.blackboard_read(team_id=team, agent_id=a, key=k, trace_id=tid)
+af.tool(agent_id=a, tool="search", phase="start", task_id=tid)
 af.close()
 ```
 
@@ -120,6 +123,15 @@ SDK 없이 직접 POST 하려면 아래 스키마대로 보내면 된다.
   op: "write" | "read" | "update" | "delete",
   key: "<블랙보드 id>",
   value?: <저장/조회 값>, version?, traceId?
+}
+
+// 도구 사용 — 노드에 ⚙ 도구 라벨 + 보라색 "작업 중" 링 표시
+{
+  kind: "tool",
+  deviceId, teamId, agentId,
+  tool: "<도구 이름>",              // 필수
+  phase?: "start" | "end",          // 생략 시 "start"; "end"는 작업 해제
+  status?: "ok" | "error", summary?, taskId?, traceId?
 }
 ```
 
@@ -163,7 +175,8 @@ def emit(event):
 - **Topology**: 상단 중앙에 공유 인프라 백본 노드 **Blackboard**. 아래로 Device(큰 박스) → Team(점선 박스) → Agent(원).
   - 에이전트는 `online` 이벤트로 **시작 시 바로 생성**되고, `offline`이면 회색으로 표시. `comm`(금색 링 · ✦) / `leader`(흰 링 · ★) 역할이 강조됨.
   - 메시지는 sender → recipient **직접 엣지**(움직이는 점 + 최근 데이터 라벨), 블랙보드 write는 agent → **Blackboard**, read는 **Blackboard** → agent 흐름으로 애니메이션.
-- **Tasks**: 현재 워크스페이스의 task 요약 목록(메시지/블랙보드 수, device 수, 갱신 시각). 클릭하면 그 **task의 흐름만** Topology·Live Events에 표시. 각 행의 ✕로 task를 삭제하고, 헤더의 **전체 삭제**로 워크스페이스의 task를 한 번에 비움.
+  - `tool` 이벤트를 받으면 그 에이전트 노드에 **보라색 회전 링 + `⚙ 도구이름`** 라벨이 떠서 "지금 무슨 도구를 쓰는지(작업 중인지)" 보여줌. 도구를 연속 사용하면 링이 계속 켜져 있고, 멈추면(또는 `phase:"end"`) 사라짐.
+- **Tasks**: 현재 워크스페이스의 task 요약 목록(메시지/블랙보드/도구 수, device 수, 갱신 시각). 클릭하면 그 **task의 흐름만** Topology·Live Events에 표시. 각 행의 ✕로 task를 삭제하고, 헤더의 **전체 삭제**로 워크스페이스의 task를 한 번에 비움.
 - **Live Events**: **선택한 task의 이벤트만** 시간순 스트림(메시지/블랙보드 payload 포함). task 미선택 시 안내만 표시.
 - **Blackboard**: 현재 key별 값/버전/읽기 횟수/갱신 시각.
 - **상단바**: 워크스페이스 드롭다운(전환·생성·🗑 삭제), 연결 상태, 초당 이벤트율, 일시정지(스냅샷), 선택 task 해제.

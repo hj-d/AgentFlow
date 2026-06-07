@@ -60,13 +60,26 @@ export interface AgentEvent extends FlowEventBase {
   capabilities?: string[];
 }
 
-export type FlowEvent = MessageEvent | BlackboardEvent | AgentEvent;
+/** Tool use — an agent invoking a tool (search, code, browser, "thinking", …).
+ *  Lets the UI show what an agent is *doing* between messages: a "start" marks
+ *  the agent busy with `tool`; an optional "end" releases it (otherwise the UI
+ *  lets the busy state expire on its own, so a missing "end" self-heals). */
+export interface ToolEvent extends FlowEventBase {
+  kind: "tool";
+  tool: string; // tool name (required for tool events)
+  phase?: "start" | "end"; // default "start"
+  status?: "ok" | "error"; // optional outcome, for "end"
+  summary?: string; // optional human-readable note of what it did
+}
+
+export type FlowEvent = MessageEvent | BlackboardEvent | AgentEvent | ToolEvent;
 
 /** What producers may POST — eventId/ts are filled in by the collector if absent. */
 export type FlowEventInput =
   | (Omit<MessageEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
   | (Omit<BlackboardEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
-  | (Omit<AgentEvent, "eventId" | "ts"> & { eventId?: string; ts?: number });
+  | (Omit<AgentEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
+  | (Omit<ToolEvent, "eventId" | "ts"> & { eventId?: string; ts?: number });
 
 /** Server-side aggregate for one task — cheap to send regardless of event volume. */
 export interface TaskSummary {
@@ -76,6 +89,7 @@ export interface TaskSummary {
   count: number; // total events
   messages: number;
   blackboard: number;
+  tools: number;
   devices: string[];
   agents: number; // distinct agents involved
 }

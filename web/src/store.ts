@@ -12,6 +12,9 @@ export interface AgentNode {
   status: AgentStatus;
   role?: string;
   lastSeen: number;
+  /** What the agent is currently doing (set by tool "start", cleared by "end" or
+   *  by expireActivity once stale). `ts` is the wall-clock time of the last tool event. */
+  activity?: { tool: string; ts: number };
 }
 
 export type PulseFlow = "message" | "bb-write" | "bb-read";
@@ -40,7 +43,7 @@ export interface EdgeState {
 export interface Filters {
   device: string | null;
   team: string | null;
-  kind: "all" | "message" | "blackboard" | "agent";
+  kind: "all" | "message" | "blackboard" | "agent" | "tool";
   text: string;
 }
 
@@ -51,6 +54,14 @@ export type ControlFn = (msg: ClientControl) => void;
 const MAX_EVENTS = 500;
 const MAX_PULSES = 120;
 export const EDGE_TTL_MS = 6000;
+/** When a snapshot arrives, the newest MAX_REPLAY events are played back one at a
+ *  time (REPLAY_INTERVAL_MS apart) so the topology builds up visibly instead of
+ *  appearing all at once; anything older is applied instantly as the backdrop. */
+const MAX_REPLAY = 40;
+export const REPLAY_INTERVAL_MS = 300;
+/** How long an agent keeps showing "busy with <tool>" after its last tool event,
+ *  absent an explicit "end". Continuous tool use refreshes it; a stall lets it fade. */
+export const ACTIVITY_TTL_MS = 5000;
 
 interface State {
   connected: boolean;
@@ -58,6 +69,8 @@ interface State {
   rate: number;
   showEdgeData: boolean;
   events: FlowEvent[]; // newest first
+  /** Snapshot events queued for staggered playback (oldest first); drained by replayNext. */
+  replayQueue: FlowEvent[];
   agents: Record<string, AgentNode>;
   blackboard: Record<string, { value: unknown; version?: number; by: string; ts: number; reads: number }>;
   pulses: MessagePulse[];
@@ -99,8 +112,12 @@ interface State {
   ingestMany: (es: FlowEvent[]) => void;
   /** Replace all task-scoped derived state from a fresh server snapshot. */
   loadSnapshot: (events: FlowEvent[]) => void;
+  /** Apply the next queued snapshot event (staggered playback tick). */
+  replayNext: () => void;
   expirePulses: (now: number) => void;
   expireEdges: (now: number) => void;
+  /** Clear agent activity that hasn't been refreshed within ACTIVITY_TTL_MS. */
+  expireActivity: (now: number) => void;
 }
 
 function nodeId(e: FlowEvent): string {
@@ -145,6 +162,7 @@ export const useStore = create<State>((set) => ({
   rate: 0,
   showEdgeData: true,
   events: [],
+  replayQueue: [],
   agents: {},
   blackboard: {},
   pulses: [],
@@ -179,7 +197,7 @@ export const useStore = create<State>((set) => ({
     set((s) => {
       s.subscribe(t); // tell the server to (un)stream this task's detail
       // clear task-scoped derived state immediately; snapshot will repopulate
-      return { selectedTask: t, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false };
+      return { selectedTask: t, edges: {}, pulses: [], events: [], replayQueue: [], blackboard: {}, bbSeen: false };
     }),
   joinSpace: (sp) =>
     set((s) => {
@@ -192,6 +210,7 @@ export const useStore = create<State>((set) => ({
         edges: {},
         pulses: [],
         events: [],
+        replayQueue: [],
         blackboard: {},
         bbSeen: false,
         tasks: {},
@@ -210,14 +229,14 @@ export const useStore = create<State>((set) => ({
         tasks,
         tasksTotal: Math.max(0, s.tasksTotal - (existed ? 1 : 0)),
         // if the deleted task was focused, drop back to the all-tasks view
-        ...(wasSelected ? { selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false } : {}),
+        ...(wasSelected ? { selectedTask: null, edges: {}, pulses: [], events: [], replayQueue: [], blackboard: {}, bbSeen: false } : {}),
       };
     }),
   clearSpace: () =>
     set((s) => {
       s.control({ type: "clearSpace" });
       // keep agents (presence is re-sent by the server snapshot); drop everything task-scoped
-      return { tasks: {}, tasksTotal: 0, selectedTask: null, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false };
+      return { tasks: {}, tasksTotal: 0, selectedTask: null, edges: {}, pulses: [], events: [], replayQueue: [], blackboard: {}, bbSeen: false };
     }),
   deleteSpace: (space) =>
     set((s) => {
@@ -225,12 +244,25 @@ export const useStore = create<State>((set) => ({
       return { spaces: s.spaces.filter((x) => x.space !== space) };
     }),
 
-  ingest: (e) => set((s) => applyEvent(s, e)),
+  // While a snapshot is still replaying, append live events to the tail of the
+  // queue so they play in order behind the backlog; otherwise apply immediately.
+  ingest: (e) =>
+    set((s) => (s.replayQueue.length ? { replayQueue: [...s.replayQueue, e] } : applyEvent(s, e))),
   ingestMany: (es) => set((s) => es.reduce((acc, e) => applyEvent(acc, e), s)),
   loadSnapshot: (es) =>
     set((s) => {
-      const base: State = { ...s, edges: {}, pulses: [], events: [], blackboard: {}, bbSeen: false };
-      return es.reduce((acc, e) => applyEvent(acc, e), base);
+      const base: State = { ...s, edges: {}, pulses: [], events: [], replayQueue: [], blackboard: {}, bbSeen: false };
+      // Apply everything older than the last MAX_REPLAY instantly as a backdrop,
+      // then queue the newest MAX_REPLAY for staggered playback (oldest first).
+      const split = Math.max(0, es.length - MAX_REPLAY);
+      const backdrop = es.slice(0, split).reduce((acc, e) => applyEvent(acc, e), base);
+      return { ...backdrop, replayQueue: es.slice(split) };
+    }),
+  replayNext: () =>
+    set((s) => {
+      if (s.paused || !s.replayQueue.length) return s;
+      const [head, ...rest] = s.replayQueue;
+      return { ...applyEvent(s, head), replayQueue: rest };
     }),
 
   expirePulses: (now) =>
@@ -248,6 +280,21 @@ export const useStore = create<State>((set) => ({
         else changed = true;
       }
       return changed ? { edges: next } : s;
+    }),
+
+  expireActivity: (now) =>
+    set((s) => {
+      let changed = false;
+      const agents: Record<string, AgentNode> = {};
+      for (const [id, a] of Object.entries(s.agents)) {
+        if (a.activity && now - a.activity.ts >= ACTIVITY_TTL_MS) {
+          agents[id] = { ...a, activity: undefined };
+          changed = true;
+        } else {
+          agents[id] = a;
+        }
+      }
+      return changed ? { agents } : s;
     }),
 }));
 
@@ -268,7 +315,14 @@ function applyEvent(s: State, e: FlowEvent): State {
     status,
     role: e.kind === "agent" && e.role ? e.role : prev?.role,
     lastSeen: e.ts,
+    // carry the busy state forward; the tool branch below sets/clears it
+    activity: prev?.activity,
   };
+
+  if (e.kind === "tool") {
+    // "start" (default) marks the agent busy with this tool; "end" releases it.
+    agents[aid].activity = e.phase === "end" ? undefined : { tool: e.tool, ts: e.ts };
+  }
 
   let blackboard = s.blackboard;
   let pulses = s.pulses;

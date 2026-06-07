@@ -68,6 +68,17 @@ describe("AgentFlowClient batching", () => {
     expect(off).toMatchObject({ kind: "agent", status: "offline", agentId: "a1" });
   });
 
+  it("builds tool-use shapes (start/end)", async () => {
+    const { impl, calls } = mockFetch();
+    const af = new AgentFlowClient({ url: "x", deviceId: "d1", teamId: "t", batchSize: 2, flushIntervalMs: 0, fetchImpl: impl });
+    af.tool({ agentId: "a1", tool: "search", phase: "start", taskId: "tk" });
+    af.tool({ agentId: "a1", tool: "search", phase: "end", status: "ok", summary: "found 3", taskId: "tk" });
+    await af.flush();
+    const [start, end] = calls[0];
+    expect(start).toMatchObject({ kind: "tool", tool: "search", phase: "start", agentId: "a1", deviceId: "d1", teamId: "t", taskId: "tk" });
+    expect(end).toMatchObject({ kind: "tool", tool: "search", phase: "end", status: "ok", summary: "found 3" });
+  });
+
   it("re-queues the batch and calls onError on send failure", async () => {
     const onError = vi.fn();
     const impl = vi.fn(async () => {

@@ -77,6 +77,29 @@ class TestBatching(unittest.TestCase):
         self.assertEqual(off["status"], "offline")
         self.assertNotIn("role", off)
 
+    def test_tool_shape(self):
+        af, batches = capturing_client(device_id="d1", team_id="t", batch_size=2)
+        af.tool(agent_id="a1", tool="search", phase="start", task_id="tk")
+        af.tool(agent_id="a1", tool="search", phase="end", status="ok", summary="found 3", task_id="tk")
+        start, end = batches[0]
+        self.assertEqual(start["kind"], "tool")
+        self.assertEqual(start["tool"], "search")
+        self.assertEqual(start["phase"], "start")
+        self.assertEqual(start["agentId"], "a1")
+        self.assertEqual(start["taskId"], "tk")
+        self.assertEqual(end["phase"], "end")
+        self.assertEqual(end["status"], "ok")
+        self.assertEqual(end["summary"], "found 3")
+
+    def test_tool_drops_unset_optionals(self):
+        af, batches = capturing_client(device_id="d1", team_id="t", batch_size=1)
+        af.tool(agent_id="a1", tool="python")
+        e = batches[0][0]
+        self.assertEqual(e["kind"], "tool")
+        self.assertEqual(e["tool"], "python")
+        self.assertNotIn("phase", e)  # unset optionals stripped by _drop_none
+        self.assertNotIn("status", e)
+
     def test_emit_to_none_is_preserved(self):
         # low-level emit() must not strip an explicit to=None
         af, batches = capturing_client(device_id="d1", team_id="t", batch_size=1)

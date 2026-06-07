@@ -19,10 +19,14 @@ function summarize(e: FlowEvent): string {
   if (e.kind === "blackboard") {
     return `${e.op.toUpperCase()} ${e.key}`;
   }
+  if (e.kind === "tool") {
+    const mark = e.phase === "end" ? (e.status === "error" ? " ✗" : " ✓") : " …";
+    return `${short(e.agentId)} ⚙ ${e.tool}${mark}${e.summary ? "  " + e.summary : ""}`;
+  }
   return `${e.status.toUpperCase()} ${e.agentId}${e.role ? " (" + e.role + ")" : ""}`;
 }
 
-const BADGE: Record<FlowEvent["kind"], string> = { message: "MSG", blackboard: "BB", agent: "AGT" };
+const BADGE: Record<FlowEvent["kind"], string> = { message: "MSG", blackboard: "BB", agent: "AGT", tool: "TOOL" };
 
 export function EventFeed() {
   const events = useStore((s) => s.events);
@@ -67,7 +71,8 @@ export function EventFeed() {
             <span className="t">{fmtTime(e.ts)}</span>
             <span className={"badge " + e.kind}>{BADGE[e.kind]}</span>
             <span className="summary">{summarize(e)}</span>
-            {e.tool && <span className="tool">{e.tool}</span>}
+            {/* tool-kind events already show the tool in their summary; avoid the duplicate chip */}
+            {e.kind !== "tool" && e.tool && <span className="tool">{e.tool}</span>}
             {payload !== undefined && <span className="payload">{JSON.stringify(payload)}</span>}
           </div>
         );

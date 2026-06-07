@@ -5,7 +5,7 @@
 //! thread; a collector outage never panics or blocks your agent logic.
 //!
 //! ```no_run
-//! use agentflow_client::{AgentFlowClient, Options, Message, Blackboard, Agent};
+//! use agentflow_client::{AgentFlowClient, Options, Message, Blackboard, Agent, Tool};
 //! use serde_json::json;
 //!
 //! let af = AgentFlowClient::new(
@@ -17,6 +17,7 @@
 //! af.blackboard_write(Blackboard { agent_id: "a1", key: "bb:plan", value: Some(json!({"step": 2})),
 //!     task_id: Some("t-1"), ..Default::default() });
 //! af.blackboard_read(Blackboard { agent_id: "a2", key: "bb:plan", task_id: Some("t-1"), ..Default::default() });
+//! af.tool(Tool { agent_id: "a2", tool: "search", phase: Some("start"), task_id: Some("t-1"), ..Default::default() });
 //! af.offline(Agent { agent_id: "a1", ..Default::default() });
 //! af.close(); // flush + stop on shutdown
 //! ```
@@ -182,6 +183,21 @@ pub struct Agent<'a> {
     pub role: Option<&'a str>,
 }
 
+/// A tool invocation. `agent_id` and `tool` are required; `phase` is
+/// `"start"` (default when unset) or `"end"`.
+#[derive(Default)]
+pub struct Tool<'a> {
+    pub agent_id: &'a str,
+    pub tool: &'a str,
+    pub team_id: Option<&'a str>,
+    pub device_id: Option<&'a str>,
+    pub phase: Option<&'a str>,
+    pub status: Option<&'a str>,
+    pub summary: Option<&'a str>,
+    pub task_id: Option<&'a str>,
+    pub trace_id: Option<&'a str>,
+}
+
 fn put_str(o: &mut Map<String, Value>, k: &str, v: Option<&str>) {
     if let Some(s) = v {
         o.insert(k.into(), json!(s));
@@ -294,6 +310,25 @@ impl AgentFlowClient {
                 o.insert("value".into(), v);
             }
         }
+        self.emit(o);
+    }
+
+    /// Record a tool invocation (shown as a busy ring + ⚙ label on the agent node).
+    /// Bracket long-running tools with `phase: Some("start")` / `Some("end")`; a
+    /// single call (default "start") suffices for a quick tool — the busy state
+    /// expires on its own.
+    pub fn tool(&self, t: Tool) {
+        let mut o = Map::new();
+        o.insert("kind".into(), json!("tool"));
+        o.insert("agentId".into(), json!(t.agent_id));
+        o.insert("tool".into(), json!(t.tool));
+        put_str(&mut o, "teamId", t.team_id);
+        put_str(&mut o, "deviceId", t.device_id);
+        put_str(&mut o, "phase", t.phase);
+        put_str(&mut o, "status", t.status);
+        put_str(&mut o, "summary", t.summary);
+        put_str(&mut o, "taskId", t.task_id);
+        put_str(&mut o, "traceId", t.trace_id);
         self.emit(o);
     }
 

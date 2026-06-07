@@ -39,6 +39,9 @@ function agentEvt(agent: string, device = "d1", team = "t1"): FlowEvent {
 function msgEvt(taskId: string, device = "d1", team = "t1", agent = "a1"): FlowEvent {
   return { kind: "message", eventId: "e" + id++, ts: id, deviceId: device, teamId: team, agentId: agent, from: `${device}/${team}/${agent}`, to: `${device}/${team}/a2`, op: "send", taskId };
 }
+function toolEvt(taskId: string, tool = "search", device = "d1", team = "t1", agent = "a1"): FlowEvent {
+  return { kind: "tool", eventId: "e" + id++, ts: id, deviceId: device, teamId: team, agentId: agent, tool, taskId };
+}
 
 describe("Hub: task registry", () => {
   it("aggregates events into task summaries (count, kind, devices)", () => {
@@ -58,6 +61,21 @@ describe("Hub: task registry", () => {
     expect(t1.blackboard).toBe(1);
     expect(t1.devices.sort()).toEqual(["d1", "d2"]);
     expect(tasksMsg.total).toBe(1);
+    hub.stop();
+  });
+
+  it("counts tool events in the task summary", () => {
+    const hub = new Hub(100);
+    hub.ingest(msgEvt("t1"));
+    hub.ingest(toolEvt("t1", "search"));
+    hub.ingest(toolEvt("t1", "python"));
+
+    const ws = new FakeWS();
+    hub.addClient(ws as any);
+    const tasksMsg = ws.msgs().find((m) => m.type === "tasks");
+    const t1 = tasksMsg.tasks.find((t: any) => t.taskId === "t1");
+    expect(t1.tools).toBe(2);
+    expect(t1.count).toBe(3); // 1 message + 2 tools
     hub.stop();
   });
 });
@@ -92,6 +110,23 @@ describe("Hub: subscription filtering (scalability)", () => {
     const got = ws.events();
     expect(got).toHaveLength(1);
     expect(got[0].taskId).toBe("t1");
+    hub.stop();
+  });
+
+  it("streams tool events only to a client focused on that task", () => {
+    const hub = new Hub(100);
+    const ws = new FakeWS();
+    hub.addClient(ws as any);
+    // before subscribing, tool detail must NOT arrive
+    hub.ingest(toolEvt("t1"));
+    expect(ws.events().some((e) => e.kind === "tool")).toBe(false);
+    // after focusing the task, its tool events stream through
+    ws.subscribe("t1");
+    ws.sent.length = 0;
+    hub.ingest(toolEvt("t1", "browser"));
+    const got = ws.events();
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ kind: "tool", tool: "browser", taskId: "t1" });
     hub.stop();
   });
 

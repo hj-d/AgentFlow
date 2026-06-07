@@ -42,7 +42,17 @@ export interface AgentEvent extends FlowEventBase {
   capabilities?: string[];
 }
 
-export type FlowEvent = MessageEvent | BlackboardEvent | AgentEvent;
+/** Tool use — an agent invoking a tool. Drives the "what is this agent doing now"
+ *  busy indicator in the topology. "start" marks busy; "end" releases. */
+export interface ToolEvent extends FlowEventBase {
+  kind: "tool";
+  tool: string;
+  phase?: "start" | "end";
+  status?: "ok" | "error";
+  summary?: string;
+}
+
+export type FlowEvent = MessageEvent | BlackboardEvent | AgentEvent | ToolEvent;
 
 export interface TaskSummary {
   taskId: string;
@@ -51,6 +61,7 @@ export interface TaskSummary {
   count: number;
   messages: number;
   blackboard: number;
+  tools: number;
   devices: string[];
   agents: number;
 }

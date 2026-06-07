@@ -53,6 +53,7 @@ export function TaskList() {
           <span className="task-meta">
             <span className="badge message">{t.messages}M</span>
             <span className="badge blackboard">{t.blackboard}B</span>
+            {t.tools > 0 && <span className="badge tool">{t.tools}T</span>}
             <span className="task-dev">{t.devices.length}dev</span>
             <span className="task-age">{age(t.lastTs)}</span>
             <button
