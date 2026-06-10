@@ -25,6 +25,8 @@ export function isValidInput(raw: unknown): raw is FlowEventInput {
              e.to != null;
     case "task":
       return e.phase === "input" || e.phase === "output";
+    case "message":
+      return typeof e.title === "string" && !!e.title && typeof e.content === "string";
     default:
       return false;
   }

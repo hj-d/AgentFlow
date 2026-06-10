@@ -62,13 +62,21 @@ export interface TaskEvent extends FlowEventBase {
   scenario?: string;
 }
 
+// Message — agent narration for the execution flow chat panel.
+export interface MessageEvent extends FlowEventBase {
+  kind: "message";
+  title: string;
+  content: string;
+}
+
 export type FlowEvent =
   | AgentEvent
   | ToolEvent
   | DelegateEvent
   | BlackboardEvent
   | NotiEvent
-  | TaskEvent;
+  | TaskEvent
+  | MessageEvent;
 
 export interface TaskSummary {
   taskId: string;

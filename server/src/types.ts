@@ -1,5 +1,5 @@
 // AgentFlow — unified flow-event model.
-// 6 event kinds: agent · tool · delegate · blackboard · noti · task
+// 7 event kinds: agent · tool · delegate · blackboard · noti · task · message
 
 export const BLACKBOARD_ID = "__blackboard__";
 export const DEFAULT_SPACE = "default";
@@ -71,13 +71,21 @@ export interface TaskEvent extends FlowEventBase {
   scenario?: string;
 }
 
+// Message — agent narration for the execution flow chat panel.
+export interface MessageEvent extends FlowEventBase {
+  kind: "message";
+  title: string;
+  content: string;
+}
+
 export type FlowEvent =
   | AgentEvent
   | ToolEvent
   | DelegateEvent
   | BlackboardEvent
   | NotiEvent
-  | TaskEvent;
+  | TaskEvent
+  | MessageEvent;
 
 export type FlowEventInput =
   | (Omit<AgentEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
@@ -85,7 +93,8 @@ export type FlowEventInput =
   | (Omit<DelegateEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
   | (Omit<BlackboardEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
   | (Omit<NotiEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
-  | (Omit<TaskEvent, "eventId" | "ts"> & { eventId?: string; ts?: number });
+  | (Omit<TaskEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
+  | (Omit<MessageEvent, "eventId" | "ts"> & { eventId?: string; ts?: number });
 
 export interface TaskSummary {
   taskId: string;
