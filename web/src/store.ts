@@ -10,6 +10,8 @@ export interface AgentNode {
   label?: string;
   lastSeen: number;
   activity?: { tool: string; ts: number; phase: "start" | "end" };
+  thinking?: boolean;
+  thinkingTs?: number;
 }
 
 // ---- delegate log entry ----
@@ -57,6 +59,7 @@ export interface Pulse {
   to: string;
   flow: PulseFlow;
   start: number;
+  label?: string;
 }
 
 export interface EdgeState {
@@ -72,6 +75,7 @@ export interface EdgeState {
 
 export const EDGE_TTL_MS = 5000;
 export const ACTIVITY_TTL_MS = 5000;
+export const THINKING_TTL_MS = 4000;
 const MAX_REPLAY = 40;
 export const REPLAY_INTERVAL_MS = 250;
 const MAX_EVENTS = 400;
@@ -259,12 +263,16 @@ export const useStore = create<State>((set) => ({
     let changed = false;
     const agents: Record<string, AgentNode> = {};
     for (const [id, a] of Object.entries(s.agents)) {
+      let node = a;
       if (a.activity && a.activity.phase === "start" && now - a.activity.ts >= ACTIVITY_TTL_MS) {
-        agents[id] = { ...a, activity: undefined };
+        node = { ...node, activity: undefined };
         changed = true;
-      } else {
-        agents[id] = a;
       }
+      if (a.thinking && a.thinkingTs && now - a.thinkingTs >= THINKING_TTL_MS) {
+        node = { ...node, thinking: false };
+        changed = true;
+      }
+      agents[id] = node;
     }
     return changed ? { agents } : s;
   }),
@@ -320,8 +328,40 @@ function applyEvent(s: State, e: FlowEvent): State {
   if (e.kind === "tool") {
     agents[aid] = {
       ...agents[aid],
+      thinking: false,
       activity: e.phase === "end" ? undefined : { tool: e.tool, ts: e.ts, phase: "start" },
     };
+  }
+
+  if (e.kind === "blackboard") {
+    // Reading/writing clears thinking for that agent
+    agents[aid] = { ...agents[aid], thinking: false };
+  }
+
+  // ---- thinking state inference ----
+  // Hub starts thinking after receiving a task
+  if (e.kind === "task" && e.phase === "input") {
+    if (agents["hub"]) agents["hub"] = { ...agents["hub"], thinking: true, thinkingTs: e.ts };
+  }
+  // Delegation: sender acts → stops thinking; receiver starts thinking
+  if (e.kind === "delegate") {
+    if (agents[e.from]) agents[e.from] = { ...agents[e.from], thinking: false };
+    const thinkTarget = e.phase === "dispatch" ? e.to : e.to; // both dispatch and return make recipient think
+    if (agents[thinkTarget]) agents[thinkTarget] = { ...agents[thinkTarget], thinking: true, thinkingTs: e.ts };
+  }
+  // Noti: recipients start thinking; ack sender stops thinking
+  if (e.kind === "noti") {
+    if (e.phase === "broadcast") {
+      const targets = Array.isArray(e.to) ? e.to : [e.to as string];
+      for (const t of targets) {
+        if (agents[t]) agents[t] = { ...agents[t], thinking: true, thinkingTs: e.ts };
+      }
+    } else {
+      // ack: sender is done thinking, recipient (hub) starts thinking
+      if (agents[e.from]) agents[e.from] = { ...agents[e.from], thinking: false };
+      const ackTarget = Array.isArray(e.to) ? e.to[0] : e.to as string;
+      if (agents[ackTarget]) agents[ackTarget] = { ...agents[ackTarget], thinking: true, thinkingTs: e.ts };
+    }
   }
 
   if (e.kind === "delegate") {
@@ -337,7 +377,10 @@ function applyEvent(s: State, e: FlowEvent): State {
       taskId: e.taskId,
     };
     delegateLog = [entry, ...delegateLog].slice(0, MAX_DELEGATE_LOG);
-    pulses = addPulse(pulses, { from: e.from, to: e.to, flow: "delegate" });
+    const dlabel = e.phase === "dispatch"
+      ? (e.task ? (e.task.length > 14 ? e.task.slice(0, 13) + "…" : e.task) : "→")
+      : "↩";
+    pulses = addPulse(pulses, { from: e.from, to: e.to, flow: "delegate", label: dlabel });
     edges = upsertEdge(edges, { from: e.from, to: e.to, flow: "delegate", label: e.task ?? e.phase, data: e.payload, ts: e.ts });
   }
 
@@ -346,11 +389,11 @@ function applyEvent(s: State, e: FlowEvent): State {
     const cur = blackboard[e.key] ?? { value: undefined, by: aid, ts: e.ts, reads: 0 };
     if (e.op === "write") {
       blackboard[e.key] = { value: e.value, by: aid, ts: e.ts, reads: cur.reads };
-      pulses = addPulse(pulses, { from: aid, to: "__blackboard__", flow: "bb-write" });
+      pulses = addPulse(pulses, { from: aid, to: "__blackboard__", flow: "bb-write", label: e.key });
       edges = upsertEdge(edges, { from: aid, to: "__blackboard__", flow: "bb-write", label: e.key, data: e.value, ts: e.ts });
     } else {
       blackboard[e.key] = { ...cur, reads: cur.reads + 1, ts: e.ts };
-      pulses = addPulse(pulses, { from: "__blackboard__", to: aid, flow: "bb-read" });
+      pulses = addPulse(pulses, { from: "__blackboard__", to: aid, flow: "bb-read", label: e.key });
       edges = upsertEdge(edges, { from: "__blackboard__", to: aid, flow: "bb-read", label: e.key, data: cur.value, ts: e.ts });
     }
     bbSeen = true;
@@ -370,8 +413,9 @@ function applyEvent(s: State, e: FlowEvent): State {
     };
     notiLog = [entry, ...notiLog].slice(0, MAX_NOTI_LOG);
     const targets = Array.isArray(e.to) ? e.to : [e.to];
+    const nlabel = e.phase === "broadcast" ? ("📢" + (e.key ? " " + e.key : "")) : "✓ ack";
     for (const t of targets) {
-      pulses = addPulse(pulses, { from: e.from, to: t, flow: "noti" });
+      pulses = addPulse(pulses, { from: e.from, to: t, flow: "noti", label: nlabel });
       edges = upsertEdge(edges, { from: e.from, to: t, flow: "noti", label: e.phase, data: e.message, ts: e.ts });
     }
   }
