@@ -1,114 +1,108 @@
 /**
- * AgentFlow client SDK (drop-in, dependency-free).
+ * AgentFlow SDK — TypeScript/Node (drop-in, zero dependencies).
  *
- * Add emit calls at your message-server relay point and at blackboard read/write.
- * Events are batched and sent fire-and-forget — a collector outage never throws
- * into your agent logic.
+ * 6 event kinds: agent · tool · delegate · blackboard · noti · task
+ * Events are batched and sent fire-and-forget; a collector outage never
+ * throws into your agent logic.
  *
- *   const af = new AgentFlowClient({ url: "http://collector:3001/ingest",
- *                                    deviceId: "edge-1" });
- *   af.message({ teamId, agentId: from, from, to, msgType, traceId, body });
- *   af.blackboardWrite({ teamId, agentId, key, value, traceId });
- *   af.blackboardRead({ teamId, agentId, key, traceId });
+ *   const af = new AgentFlowClient({ url: "http://collector:3001/ingest", agentId: "hub" });
+ *
+ *   af.agentStart({ role: "orchestrator", label: "HomeHub" });
+ *   af.dispatch({ from: "hub", to: "pc", task: "영상 편집해줘", taskId: "t-1" });
+ *   af.toolStart({ tool: "edit_video", taskId: "t-1" });
+ *   af.bbWrite({ key: "video_result", value: { file: "out.mp4" }, taskId: "t-1" });
+ *   af.broadcast({ from: "hub", to: ["pc","tv"], key: "task_req", taskId: "t-1" });
+ *   af.taskInput({ request: "영상 만들어줘", taskId: "t-1" });
+ *
  *   await af.close(); // flush + stop on shutdown
  */
 
-export type EventKind = "message" | "blackboard" | "agent" | "tool";
+// ---- event input types ----
 
-export interface MessageEventInput {
-  kind: "message";
-  deviceId: string;
-  teamId: string;
-  agentId: string;
-  from: string;
-  to: string | null;
-  op?: "send" | "deliver";
-  msgType?: string;
-  body?: unknown;
-  size?: number;
-  tool?: string;
+export interface EventBase {
+  agentId?: string;
   space?: string;
   taskId?: string;
   traceId?: string;
-  correlationId?: string;
   causedBy?: string;
   ts?: number;
   eventId?: string;
 }
 
-export interface BlackboardEventInput {
+export interface AgentEventInput extends EventBase {
+  kind: "agent";
+  phase: "start" | "end";
+  role?: string;
+  label?: string;
+}
+
+export interface ToolEventInput extends EventBase {
+  kind: "tool";
+  tool: string;
+  phase: "start" | "end";
+  status?: "ok" | "error";
+  input?: unknown;
+  output?: unknown;
+  summary?: string;
+}
+
+export interface DelegateEventInput extends EventBase {
+  kind: "delegate";
+  phase: "dispatch" | "return";
+  from: string;
+  to: string;
+  task?: string;
+  payload?: unknown;
+}
+
+export interface BlackboardEventInput extends EventBase {
   kind: "blackboard";
-  deviceId: string;
-  teamId: string;
-  agentId: string;
-  op: "write" | "read" | "update" | "delete";
+  op: "read" | "write";
   key: string;
   value?: unknown;
-  version?: number;
-  tool?: string;
-  space?: string;
-  taskId?: string;
-  traceId?: string;
-  correlationId?: string;
-  causedBy?: string;
-  ts?: number;
-  eventId?: string;
 }
 
-export interface AgentEventInput {
-  kind: "agent";
-  deviceId: string;
-  teamId: string;
-  agentId: string;
-  status: "online" | "offline";
-  role?: string;
-  capabilities?: string[];
-  tool?: string;
-  space?: string;
-  traceId?: string;
-  ts?: number;
-  eventId?: string;
+export interface NotiEventInput extends EventBase {
+  kind: "noti";
+  phase: "broadcast" | "ack";
+  from: string;
+  to: string | string[];
+  key?: string;
+  message?: string;
 }
 
-export interface ToolEventInput {
-  kind: "tool";
-  deviceId: string;
-  teamId: string;
-  agentId: string;
-  tool: string;
-  phase?: "start" | "end";
-  status?: "ok" | "error";
-  summary?: string;
-  space?: string;
-  taskId?: string;
-  traceId?: string;
-  correlationId?: string;
-  causedBy?: string;
-  ts?: number;
-  eventId?: string;
+export interface TaskEventInput extends EventBase {
+  kind: "task";
+  phase: "input" | "output";
+  request?: string;
+  result?: unknown;
+  scenario?: string;
 }
 
-export type FlowEventInput = MessageEventInput | BlackboardEventInput | AgentEventInput | ToolEventInput;
+export type FlowEventInput =
+  | AgentEventInput
+  | ToolEventInput
+  | DelegateEventInput
+  | BlackboardEventInput
+  | NotiEventInput
+  | TaskEventInput;
 
-type FetchLike = (
-  url: string,
-  init: { method: string; headers: Record<string, string>; body: string }
-) => Promise<unknown>;
+// ---- client options ----
+
+type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<unknown>;
 
 export interface AgentFlowOptions {
   /** Collector ingest endpoint, e.g. http://collector:3001/ingest */
   url: string;
-  /** Workspace (top-level isolation key) applied to every event. Default "default". */
+  /** Workspace (top-level isolation key). Default "default". */
   space?: string;
-  /** Default deviceId applied to every event (overridable per call). */
-  deviceId?: string;
-  /** Default teamId applied to every event (overridable per call). */
-  teamId?: string;
+  /** Default agentId applied to every event (overridable per call). */
+  agentId?: string;
   /** Flush when this many events are queued. Default 20. */
   batchSize?: number;
-  /** Auto-flush interval in ms. 0 disables the timer (manual flush only). Default 250. */
+  /** Auto-flush interval in ms. 0 disables the timer. Default 250. */
   flushIntervalMs?: number;
-  /** Drop oldest when the queue exceeds this (collector down). Default 5000. */
+  /** Drop oldest when queue exceeds this. Default 5000. */
   maxQueue?: number;
   /** Injectable fetch (defaults to global fetch). */
   fetchImpl?: FetchLike;
@@ -116,18 +110,19 @@ export interface AgentFlowOptions {
   onError?: (err: unknown) => void;
 }
 
+// ---- client ----
+
 export class AgentFlowClient {
   private queue: FlowEventInput[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
-  private readonly opts: Required<Omit<AgentFlowOptions, "deviceId" | "teamId" | "onError" | "space">> &
-    Pick<AgentFlowOptions, "deviceId" | "teamId" | "onError" | "space">;
+  private readonly opts: Required<Omit<AgentFlowOptions, "agentId" | "space" | "onError">> &
+    Pick<AgentFlowOptions, "agentId" | "space" | "onError">;
 
   constructor(options: AgentFlowOptions) {
     this.opts = {
       url: options.url,
       space: options.space,
-      deviceId: options.deviceId,
-      teamId: options.teamId,
+      agentId: options.agentId,
       batchSize: options.batchSize ?? 20,
       flushIntervalMs: options.flushIntervalMs ?? 250,
       maxQueue: options.maxQueue ?? 5000,
@@ -144,58 +139,88 @@ export class AgentFlowClient {
   emit(event: FlowEventInput): void {
     const e = {
       ...event,
+      agentId: event.agentId ?? this.opts.agentId,
       space: event.space ?? this.opts.space,
-      deviceId: event.deviceId ?? this.opts.deviceId,
-      teamId: event.teamId ?? this.opts.teamId,
     } as FlowEventInput;
     this.queue.push(e);
-    if (this.queue.length > this.opts.maxQueue) {
-      this.queue.splice(0, this.queue.length - this.opts.maxQueue);
-    }
+    if (this.queue.length > this.opts.maxQueue) this.queue.splice(0, this.queue.length - this.opts.maxQueue);
     if (this.queue.length >= this.opts.batchSize) void this.flush();
   }
 
-  /** Announce an agent has started — call once on agent startup so it shows up immediately. */
-  online(
-    e: Omit<AgentEventInput, "kind" | "status" | "deviceId" | "teamId"> & { deviceId?: string; teamId?: string }
-  ): void {
-    this.emit({ kind: "agent", status: "online", ...e } as AgentEventInput);
+  // ---- Agent ----
+
+  /** Agent comes online — call once at startup so it appears in the topology immediately. */
+  agentStart(e: Omit<AgentEventInput, "kind" | "phase"> & { agentId?: string } = {}): void {
+    this.emit({ kind: "agent", phase: "start", ...e });
   }
 
-  /** Announce an agent has stopped. */
-  offline(
-    e: Omit<AgentEventInput, "kind" | "status" | "deviceId" | "teamId"> & { deviceId?: string; teamId?: string }
-  ): void {
-    this.emit({ kind: "agent", status: "offline", ...e } as AgentEventInput);
+  /** Agent goes offline. */
+  agentEnd(e: Omit<AgentEventInput, "kind" | "phase"> & { agentId?: string } = {}): void {
+    this.emit({ kind: "agent", phase: "end", ...e });
   }
 
-  message(e: Omit<MessageEventInput, "kind" | "deviceId" | "teamId"> & { deviceId?: string; teamId?: string }): void {
-    this.emit({ kind: "message", op: e.op ?? "send", ...e } as MessageEventInput);
+  // ---- Tool ----
+
+  /** Mark the agent as busy with a tool. */
+  toolStart(e: Omit<ToolEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "tool", phase: "start", ...e });
   }
 
-  blackboardWrite(
-    e: Omit<BlackboardEventInput, "kind" | "op" | "deviceId" | "teamId"> & { deviceId?: string; teamId?: string }
-  ): void {
-    this.emit({ kind: "blackboard", op: "write", ...e } as BlackboardEventInput);
+  /** Release the busy state and record the result. */
+  toolEnd(e: Omit<ToolEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "tool", phase: "end", ...e });
   }
 
-  blackboardRead(
-    e: Omit<BlackboardEventInput, "kind" | "op" | "value" | "deviceId" | "teamId"> & {
-      deviceId?: string;
-      teamId?: string;
-    }
-  ): void {
-    this.emit({ kind: "blackboard", op: "read", ...e } as BlackboardEventInput);
+  // ---- Delegate ----
+
+  /** Dispatch work to another agent. */
+  dispatch(e: Omit<DelegateEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "delegate", phase: "dispatch", ...e });
   }
 
-  /** Record a tool invocation. Use phase "start"/"end" to bracket long-running tools
-   *  so the UI can show the agent as busy meanwhile; a single call (default "start")
-   *  is enough for a quick tool and the busy state expires on its own. */
-  tool(e: Omit<ToolEventInput, "kind" | "deviceId" | "teamId"> & { deviceId?: string; teamId?: string }): void {
-    this.emit({ kind: "tool", ...e } as ToolEventInput);
+  /** Return results to the delegating agent. */
+  return(e: Omit<DelegateEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "delegate", phase: "return", ...e });
   }
 
-  /** Send everything queued now. Resolves even on failure (re-queues batch). */
+  // ---- Blackboard ----
+
+  /** Write a value to the shared blackboard. */
+  bbWrite(e: Omit<BlackboardEventInput, "kind" | "op">): void {
+    this.emit({ kind: "blackboard", op: "write", ...e });
+  }
+
+  /** Read a value from the shared blackboard. */
+  bbRead(e: Omit<BlackboardEventInput, "kind" | "op" | "value">): void {
+    this.emit({ kind: "blackboard", op: "read", ...e });
+  }
+
+  // ---- Noti ----
+
+  /** Broadcast to agents: "check the blackboard at `key`". */
+  broadcast(e: Omit<NotiEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "noti", phase: "broadcast", ...e });
+  }
+
+  /** Acknowledge a broadcast: "I've read and responded to `key`". */
+  ack(e: Omit<NotiEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "noti", phase: "ack", ...e });
+  }
+
+  // ---- Task (Hub only) ----
+
+  /** Hub receives a task from the user. */
+  taskInput(e: Omit<TaskEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "task", phase: "input", ...e });
+  }
+
+  /** Hub returns the final result to the user. */
+  taskOutput(e: Omit<TaskEventInput, "kind" | "phase">): void {
+    this.emit({ kind: "task", phase: "output", ...e });
+  }
+
+  // ---- flush / close ----
+
   async flush(): Promise<void> {
     if (this.queue.length === 0) return;
     const batch = this.queue;
@@ -207,17 +232,13 @@ export class AgentFlowClient {
         body: JSON.stringify(batch),
       });
     } catch (err) {
-      // re-queue (bounded) so a transient outage doesn't lose recent events
       this.queue = batch.concat(this.queue).slice(-this.opts.maxQueue);
       this.opts.onError?.(err);
     }
   }
 
-  get pending(): number {
-    return this.queue.length;
-  }
+  get pending(): number { return this.queue.length; }
 
-  /** Flush and stop the timer. Call on shutdown. */
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;

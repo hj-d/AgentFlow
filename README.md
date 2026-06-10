@@ -1,24 +1,61 @@
 # AgentFlow
 
-여러 **Device → Team → Agent** 계층에서, Agent들이 **메시지 서버(릴레이)** 와 **블랙보드(공유 저장소)** 를 통해 주고받는 통신 흐름을 **실시간 웹 대시보드**로 시각화하는 관찰(observability) 레이어.
+**HomeHub · PC · TV** 세 에이전트가 협력해 작업을 처리하는 흐름을 **실시간 웹 대시보드**로 시각화하는 관찰(observability) 레이어.
 
-- **관찰 전용**: 기존 에이전트/통신 시스템은 수정하지 않음. 이벤트를 *읽어서* 보여줌.
-- **라이브 전용**: DB 없음. 최근 N개만 인메모리 보관(늦게 접속한 클라이언트 스냅샷용).
-- **실시간**: `POST /ingest` → WebSocket fanout (1초 이내 즉시 반영).
+- **관찰 전용**: 기존 에이전트 코드를 수정하지 않고, 이벤트만 수집해서 보여줌.
+- **라이브 전용**: DB 없음. 최근 N개만 인메모리 보관.
+- **실시간**: `POST /ingest` → WebSocket fanout (1초 이내 반영).
 
 ```
-Devices ──(POST /ingest)──▶  server(:3001)  ──(WebSocket /ws)──▶  web(:8080)
- message server / blackboard       │                                토폴로지 / 라이브 피드 / 블랙보드
-                            in-memory ring buffer
+Agents ──(POST /ingest)──▶  server(:3001)  ──(WebSocket /ws)──▶  web(:8080)
+  hub / pc / tv                  │                              3-panel dashboard
+                         in-memory ring buffer
 ```
+
+---
+
+## 데모 시나리오
+
+두 시나리오가 번갈아 실행됩니다.
+
+**Scenario 1 — Hub가 능력을 알고 있는 경우**
+```
+[Task Input]  사용자 → Hub: "가족 사진으로 엄마 생일파티 영상 만들어줘"
+[Tool]        Hub: discover_agents → PC·TV 능력 확인
+[Tool]        Hub: analyze_and_plan → 계획 수립
+[Delegate]    Hub → TV: "선호 음악 정보 알려줘"
+  [Tool]      TV: get_music_preferences
+  [BB Write]  TV: music_preferences
+[Delegate]    Hub → PC: "사진으로 생일 영상 편집해줘"
+  [Tool]      PC: select_photos → edit_video
+  [BB Write]  PC: selected_photos, video_result
+[Task Output] Hub → 사용자: { video: "birthday_mom_2024.mp4" }
+```
+
+**Scenario 2 — Hub가 에이전트 능력을 모르는 경우**
+```
+[Task Input]  사용자 → Hub
+[Tool]        Hub: analyze_requirements
+[BB Write]    Hub: task_requirements  ← 필요 능력 목록 기록
+[Noti broadcast] Hub → PC·TV: "task_requirements 확인해"
+  [BB Read]   PC/TV: task_requirements 읽기
+  [BB Write]  PC: capabilities_pc  /  TV: capabilities_tv
+  [Noti ack]  PC → Hub: "작성 완료"  /  TV → Hub: "작성 완료"
+[BB Read]     Hub: capabilities_pc, capabilities_tv
+[Tool]        Hub: create_plan → 계획 수립
+              ↓ 이후 Scenario 1과 동일
+[Task Output] Hub → 사용자
+```
+
+---
 
 ## 실행
 
-### Docker (배포)
+### Docker (권장)
 
 ```bash
 docker compose up --build           # web:8080, server:3001
-docker compose --profile demo up    # + 데모 트래픽 시뮬레이터
+docker compose --profile demo up    # + 시뮬레이터 포함
 ```
 
 브라우저에서 http://localhost:8080
@@ -29,15 +66,16 @@ docker compose --profile demo up    # + 데모 트래픽 시뮬레이터
 # 터미널 1 — 수집 서버
 cd server && npm install && npm run dev
 
-# 터미널 2 — 웹
+# 터미널 2 — 웹 대시보드
 cd web && npm install && npm run dev      # http://localhost:8080
 
-# 터미널 3 — (선택) 데모 트래픽
+# 터미널 3 — 데모 트래픽 (선택)
 cd server && npm run sim
 ```
 
-> 데모 트래픽은 눈으로 따라가기 쉽게 **천천히** 흐른다. 속도/양은 환경변수로 조절:
-> `SIM_INTERVAL_MS`(스텝 간격, 기본 1500) · `SIM_MAX_ACTIVE`(동시 task, 기본 2) · `SIM_SPAWN_PROB`(생성 확률, 기본 0.25) · `SPACES`(워크스페이스 목록).
+> 시뮬레이터 속도 조절: `SIM_INTERVAL_MS`(스텝 간격, 기본 1800ms) · `SPACES`(워크스페이스)
+
+---
 
 ## 포트
 
@@ -46,160 +84,186 @@ cd server && npm run sim
 | web (대시보드) | `8080` |
 | server (수집/WS) | `3001` |
 
-웹은 기본적으로 `ws://<현재호스트>:3001/ws` 로 접속한다. 다른 위치라면 `index.html`에서
-`window.__AGENTFLOW_WS__ = "ws://host:3001/ws"` 로 덮어쓸 수 있다.
+---
 
-## 내 시스템 연동하기
+## 이벤트 스키마
 
-각 디바이스의 **메시지 서버**와 **블랙보드** 코드에 이벤트 emit 한 줄만 추가하면 된다.
-서버는 `eventId`/`ts`가 없으면 자동으로 채운다. `traceId`/`correlationId`는 흐름을
-한 줄기로 잇는 데 쓰이니 가지고 있는 값을 넣어주는 것이 좋다.
+6가지 이벤트를 `POST /ingest` 로 전송합니다. `eventId`·`ts`는 생략 시 서버가 자동 채웁니다.
 
-드롭인 SDK가 4개 언어로 준비돼 있다 (배칭 + fire-and-forget). 각 동작의 자세한 설명·언어별 예제는 **[SDK 가이드: `clients/README.md`](clients/README.md)** 참고:
+### Agent — 에이전트 생존 주기
 
-- **TypeScript/Node**: [`clients/ts/agentflow.ts`](clients/ts/agentflow.ts)
-- **Python**: [`clients/python/agentflow_client.py`](clients/python/agentflow_client.py)
-- **Rust**: [`clients/rust/`](clients/rust/)
-- **Kotlin/JVM**: [`clients/kotlin/AgentFlowClient.kt`](clients/kotlin/AgentFlowClient.kt)
+```json
+{
+  "kind": "agent",
+  "agentId": "hub",
+  "phase": "start",
+  "role": "orchestrator",
+  "label": "HomeHub"
+}
+```
+
+| `phase` | 의미 |
+|---------|------|
+| `"start"` | 에이전트 온라인 — 토폴로지에 카드 생성 |
+| `"end"` | 에이전트 오프라인 — 카드 흐리게 |
+
+### Tool — 도구 호출
+
+```json
+{
+  "kind": "tool",
+  "agentId": "pc",
+  "tool": "edit_video",
+  "phase": "start",
+  "input": { "photos": 24, "music": "K-Pop 발라드" },
+  "taskId": "task-1"
+}
+```
+
+`phase: "start"` → 디바이스 카드에 ⚙ 도구이름 + 작업 중 표시. `phase: "end"` → 해제.
+
+### Delegate — 에이전트 간 위임
+
+```json
+{
+  "kind": "delegate",
+  "agentId": "hub",
+  "phase": "dispatch",
+  "from": "hub",
+  "to": "pc",
+  "task": "엄마 생일 영상 편집해줘",
+  "taskId": "task-1"
+}
+```
+
+| `phase` | 의미 |
+|---------|------|
+| `"dispatch"` | 작업 위임 — 왼쪽 Delegate Log에 → 버블 |
+| `"return"` | 결과 반환 — 왼쪽 Delegate Log에 ← 버블 |
+
+### Blackboard — 공유 상태 읽기/쓰기
+
+```json
+{
+  "kind": "blackboard",
+  "agentId": "tv",
+  "op": "write",
+  "key": "music_preferences",
+  "value": { "genre": "K-Pop 발라드" },
+  "taskId": "task-1"
+}
+```
+
+### Noti — 블랙보드 변경 알림
+
+```json
+{
+  "kind": "noti",
+  "agentId": "hub",
+  "phase": "broadcast",
+  "from": "hub",
+  "to": ["pc", "tv"],
+  "key": "task_requirements",
+  "message": "새 작업 요청 확인해",
+  "taskId": "task-1"
+}
+```
+
+| `phase` | 의미 |
+|---------|------|
+| `"broadcast"` | Hub → 에이전트들: "블랙보드 확인해" |
+| `"ack"` | 에이전트 → Hub: "확인 완료" |
+
+### Task — 사용자 작업 진입/결과 (Hub 전용)
+
+```json
+{
+  "kind": "task",
+  "agentId": "hub",
+  "phase": "input",
+  "request": "가족 사진으로 엄마 생일파티 영상 만들어줘",
+  "scenario": "scenario-1",
+  "taskId": "task-1"
+}
+```
+
+---
+
+## SDK 연동
+
+드롭인 SDK가 준비돼 있습니다 (배칭 + fire-and-forget). 상세 가이드: **[clients/README.md](clients/README.md)**
+
+| 언어 | 파일 |
+|------|------|
+| TypeScript/Node | [`clients/ts/agentflow.ts`](clients/ts/agentflow.ts) |
+| Python | [`clients/python/agentflow_client.py`](clients/python/agentflow_client.py) |
+| Rust | [`clients/rust/`](clients/rust/) |
+| Kotlin/JVM | [`clients/kotlin/AgentFlowClient.kt`](clients/kotlin/AgentFlowClient.kt) |
 
 ```ts
 import { AgentFlowClient } from "./clients/ts/agentflow";
-const af = new AgentFlowClient({ url: "http://collector:3001/ingest", deviceId: "edge-1" });
+const af = new AgentFlowClient({ url: "http://collector:3001/ingest", agentId: "hub" });
 
-// 1) 에이전트 시작 시 등록 → 트래픽 전에 토폴로지에 바로 표시됨
-af.online({ teamId, agentId, role: "planner" });
-
-// 2) 메시지 릴레이 지점에서  (sender → [Message Server] → recipient 로 시각화)
-af.message({ teamId, agentId: from, from, to, msgType, traceId, body });
-// 3) 블랙보드 write / read 지점에서  ([Blackboard] 노드를 거쳐 시각화)
-af.blackboardWrite({ teamId, agentId, key, value, traceId });
-af.blackboardRead({ teamId, agentId, key, traceId });
-// 4) 도구 호출 지점에서  (노드에 ⚙ 도구 라벨 + 보라색 "작업 중" 링)
-af.tool({ teamId, agentId, tool: "search", phase: "start", taskId });
-
-// 5) 에이전트 종료 시
-af.offline({ teamId, agentId });
-await af.close(); // 종료 시 flush
+af.agentStart({ role: "orchestrator", label: "HomeHub" });
+af.taskInput({ request: "영상 만들어줘", taskId: "t-1", scenario: "scenario-1" });
+af.dispatch({ from: "hub", to: "pc", task: "사진으로 영상 편집해줘", taskId: "t-1" });
+af.toolStart({ tool: "edit_video", taskId: "t-1" });
+af.toolEnd({ tool: "edit_video", status: "ok", output: { file: "out.mp4" }, taskId: "t-1" });
+af.bbWrite({ key: "video_result", value: { file: "out.mp4" }, taskId: "t-1" });
+af.taskOutput({ result: { video: "out.mp4" }, taskId: "t-1" });
+await af.close();
 ```
 
 ```python
 from agentflow_client import AgentFlowClient
-af = AgentFlowClient(url="http://collector:3001/ingest", device_id="edge-1")
-af.message(team_id=team, agent_id=src, frm=src, to=dst, msg_type="task", trace_id=tid, body={"x": 1})
-af.blackboard_write(team_id=team, agent_id=a, key=k, value=v, trace_id=tid)
-af.blackboard_read(team_id=team, agent_id=a, key=k, trace_id=tid)
-af.tool(agent_id=a, tool="search", phase="start", task_id=tid)
+af = AgentFlowClient(url="http://collector:3001/ingest", agent_id="hub")
+
+af.agent_start(role="orchestrator", label="HomeHub")
+af.task_input(request="영상 만들어줘", task_id="t-1", scenario="scenario-1")
+af.dispatch(frm="hub", to="pc", task="사진으로 영상 편집해줘", task_id="t-1")
+af.tool_start(tool="edit_video", task_id="t-1")
+af.tool_end(tool="edit_video", status="ok", output={"file": "out.mp4"}, task_id="t-1")
+af.bb_write(key="video_result", value={"file": "out.mp4"}, task_id="t-1")
+af.task_output(result={"video": "out.mp4"}, task_id="t-1")
 af.close()
 ```
 
-SDK 없이 직접 POST 하려면 아래 스키마대로 보내면 된다.
-
-### 이벤트 스키마 (`server/src/types.ts`)
-
-```ts
-// 에이전트 라이프사이클 (시작/종료 시) — 토폴로지에 노드 생성/표시
-{
-  kind: "agent",
-  deviceId, teamId, agentId,
-  status: "online" | "offline",
-  role?, capabilities?, traceId?
-}
-
-// 메시지 (릴레이 송신/전달)
-{
-  kind: "message",
-  deviceId, teamId, agentId,        // 보내는 주체
-  from: "device/team/agent",
-  to:   "device/team/agent" | topic | null,   // null = broadcast. 키는 항상 존재해야 함
-  op: "send" | "deliver",
-  msgType?, tool?, traceId?, correlationId?,
-  body?: <실제 페이로드>             // UI에 그대로 표시됨
-}
-
-// 블랙보드 (id로 write / read)
-{
-  kind: "blackboard",
-  deviceId, teamId, agentId,
-  op: "write" | "read" | "update" | "delete",
-  key: "<블랙보드 id>",
-  value?: <저장/조회 값>, version?, traceId?
-}
-
-// 도구 사용 — 노드에 ⚙ 도구 라벨 + 보라색 "작업 중" 링 표시
-{
-  kind: "tool",
-  deviceId, teamId, agentId,
-  tool: "<도구 이름>",              // 필수
-  phase?: "start" | "end",          // 생략 시 "start"; "end"는 작업 해제
-  status?: "ok" | "error", summary?, taskId?, traceId?
-}
-```
-
-### 예시 (JS) — 메시지 서버 릴레이 지점
-
-```js
-async function emit(event) {
-  try {
-    await fetch("http://<collector-host>:3001/ingest", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(event),
-    });
-  } catch {} // 관찰 실패가 본 로직을 막지 않도록 무시
-}
-
-// 메시지를 relay 할 때
-emit({ kind: "message", deviceId, teamId, agentId: from,
-       from, to, op: "send", msgType, traceId, body });
-
-// 블랙보드 write/read 시
-emit({ kind: "blackboard", deviceId, teamId, agentId,
-       op: "write", key, value, traceId });
-```
-
-### 예시 (Python)
-
-```python
-import requests
-def emit(event):
-    try:
-        requests.post("http://<collector-host>:3001/ingest", json=event, timeout=0.5)
-    except Exception:
-        pass
-```
-
-> 배열로 한 번에 여러 이벤트를 보내도 된다: `POST /ingest` body = `[event, event, ...]`.
+---
 
 ## UI 구성
 
-- **Topology**: 상단 중앙에 공유 인프라 백본 노드 **Blackboard**. 아래로 Device(큰 박스) → Team(점선 박스) → Agent(원).
-  - 에이전트는 `online` 이벤트로 **시작 시 바로 생성**되고, `offline`이면 회색으로 표시. `comm`(금색 링 · ✦) / `leader`(흰 링 · ★) 역할이 강조됨.
-  - 메시지는 sender → recipient **직접 엣지**(움직이는 점 + 최근 데이터 라벨), 블랙보드 write는 agent → **Blackboard**, read는 **Blackboard** → agent 흐름으로 애니메이션.
-  - `tool` 이벤트를 받으면 그 에이전트 노드에 **보라색 회전 링 + `⚙ 도구이름`** 라벨이 떠서 "지금 무슨 도구를 쓰는지(작업 중인지)" 보여줌. 도구를 연속 사용하면 링이 계속 켜져 있고, 멈추면(또는 `phase:"end"`) 사라짐.
-- **Tasks**: 현재 워크스페이스의 task 요약 목록(메시지/블랙보드/도구 수, device 수, 갱신 시각). 클릭하면 그 **task의 흐름만** Topology·Live Events에 표시. 각 행의 ✕로 task를 삭제하고, 헤더의 **전체 삭제**로 워크스페이스의 task를 한 번에 비움.
-- **Live Events**: **선택한 task의 이벤트만** 시간순 스트림(메시지/블랙보드 payload 포함). task 미선택 시 안내만 표시.
-- **Blackboard**: 현재 key별 값/버전/읽기 횟수/갱신 시각.
-- **상단바**: 워크스페이스 드롭다운(전환·생성·🗑 삭제), 연결 상태, 초당 이벤트율, 일시정지(스냅샷), 선택 task 해제.
-- **필터바**: device / team / kind / 페이로드 검색 + 엣지 데이터 라벨 토글.
+```
+┌──────────────┬──────────────────────────┬──────────────────┐
+│              │                          │                  │
+│  Delegate    │   🖥️ PC  ←──→  📡 Hub   │  Blackboard      │
+│  Log         │          ←──→  📺 TV    │  Notifications   │
+│              │                          │  Events / Tasks  │
+│  (위임 내역  │  디바이스 카드 + 연결선  │                  │
+│   채팅 버블) │  펄스 애니메이션         │  Task I/O 배너   │
+│              │                          │                  │
+└──────────────┴──────────────────────────┴──────────────────┘
+```
+
+- **Delegate Log** (왼쪽): Hub↔PC·TV 간 dispatch/return을 채팅 버블 스타일로 표시.
+- **Network** (중앙): 3개 디바이스 카드 (🖥️PC · 📡Hub · 📺TV). 현재 사용 중인 툴, 온라인/오프라인 상태, 연결선 펄스 애니메이션.
+- **Info Panel** (오른쪽): Blackboard 키/값 · Noti 내역 · Event 스트림 · Task 목록 탭. 상단에 현재 Task Input/Output 배너.
+
+---
 
 ## 구조
 
 ```
 server/    Node + TS. /ingest 수집, 링버퍼, WebSocket fanout, 시뮬레이터.
-web/       React + Vite + TS + Zustand. 커스텀 SVG 토폴로지, 패널들.
-clients/   드롭인 SDK (ts/, python/, rust/, kotlin/) + 가이드(README.md).
+web/       React + Vite + TS + Zustand. 3-panel 대시보드.
+clients/   드롭인 SDK (ts/, python/, rust/, kotlin/) + 가이드.
 ```
+
+---
 
 ## 테스트
 
 ```bash
-cd server && npm test                       # 63 tests (ringbuffer/ingest/hub/tasks/spaces/delete/통합)
-cd web && npm test                          # 44 tests (store 로직: 라이프사이클·라우팅·task/space 삭제)
-cd clients/python && python3 -m unittest    # 12 tests (Python SDK)
+cd server && npm test          # 서버 유닛/통합 테스트
+cd web && npm test             # 웹 store 로직 테스트
+cd clients/python && python3 -m unittest   # Python SDK 테스트
 ```
-
-## 확장 여지 (필요 시)
-
-- 이벤트율이 매우 높아지면: 서버측 필터 구독, 집계/샘플링(백프레셔).
-- 흐름 재생/이력: 라이브 전용 대신 Redis Streams/시계열 저장 추가.
-- trace ID가 없는 경우: 휴리스틱 연결 또는 경량 계측(SDK 훅).

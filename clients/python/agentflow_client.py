@@ -1,15 +1,18 @@
 """
-AgentFlow client SDK for Python (stdlib only, drop-in).
+AgentFlow SDK — Python (stdlib only, drop-in, zero dependencies).
 
-Add emit calls at your message-server relay point and at blackboard read/write.
-Events are batched and sent from a background thread; a collector outage never
-raises into your agent logic.
+6 event kinds: agent · tool · delegate · blackboard · noti · task
+Events are batched and sent from a background thread; a collector outage
+never raises into your agent logic.
 
-    af = AgentFlowClient(url="http://collector:3001/ingest", device_id="edge-1")
-    af.message(team_id="planner", agent_id=src, frm=src, to=dst,
-               msg_type="task", trace_id=tid, body={"x": 1})
-    af.blackboard_write(team_id="planner", agent_id=a, key=k, value=v, trace_id=tid)
-    af.blackboard_read(team_id="planner", agent_id=a, key=k, trace_id=tid)
+    af = AgentFlowClient(url="http://collector:3001/ingest", agent_id="hub")
+
+    af.agent_start(role="orchestrator", label="HomeHub")
+    af.dispatch(frm="hub", to="pc", task="영상 편집해줘", task_id="t-1")
+    af.tool_start(tool="edit_video", task_id="t-1")
+    af.bb_write(key="video_result", value={"file": "out.mp4"}, task_id="t-1")
+    af.broadcast(frm="hub", to=["pc","tv"], key="task_req", task_id="t-1")
+    af.task_input(request="영상 만들어줘", task_id="t-1")
     af.close()  # flush + stop on shutdown
 """
 
@@ -17,9 +20,8 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import urllib.request
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional, Union
 
 
 class AgentFlowClient:
@@ -27,8 +29,7 @@ class AgentFlowClient:
         self,
         url: str,
         space: Optional[str] = None,
-        device_id: Optional[str] = None,
-        team_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         batch_size: int = 20,
         flush_interval: float = 0.25,
         max_queue: int = 5000,
@@ -38,8 +39,7 @@ class AgentFlowClient:
     ) -> None:
         self._url = url
         self._space = space
-        self._device_id = device_id
-        self._team_id = team_id
+        self._agent_id = agent_id
         self._batch_size = batch_size
         self._flush_interval = flush_interval
         self._max_queue = max_queue
@@ -47,7 +47,7 @@ class AgentFlowClient:
         self._on_error = on_error
         self._sender = sender or self._http_send
 
-        self._queue: list[dict[str, Any]] = []
+        self._queue: List[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -56,12 +56,13 @@ class AgentFlowClient:
             self._thread.start()
 
     # ---- public API ----
+
     def emit(self, event: dict[str, Any]) -> None:
         """Enqueue any event dict. Never raises."""
         if self._space is not None:
             event.setdefault("space", self._space)
-        event.setdefault("deviceId", self._device_id)
-        event.setdefault("teamId", self._team_id)
+        if self._agent_id is not None:
+            event.setdefault("agentId", self._agent_id)
         flush_now = False
         with self._lock:
             self._queue.append(event)
@@ -72,175 +73,207 @@ class AgentFlowClient:
         if flush_now:
             self.flush()
 
-    def online(
+    # ---- Agent ----
+
+    def agent_start(
         self,
-        agent_id: str,
-        team_id: Optional[str] = None,
-        device_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         role: Optional[str] = None,
-        capabilities: Optional[list] = None,
-        trace_id: Optional[str] = None,
-    ) -> None:
-        """Announce an agent has started — call once on agent startup."""
-        self.emit(
-            _drop_none(
-                {
-                    "kind": "agent",
-                    "status": "online",
-                    "deviceId": device_id,
-                    "teamId": team_id,
-                    "agentId": agent_id,
-                    "role": role,
-                    "capabilities": capabilities,
-                    "traceId": trace_id,
-                }
-            )
-        )
-
-    def offline(
-        self,
-        agent_id: str,
-        team_id: Optional[str] = None,
-        device_id: Optional[str] = None,
-    ) -> None:
-        """Announce an agent has stopped."""
-        self.emit(
-            _drop_none(
-                {
-                    "kind": "agent",
-                    "status": "offline",
-                    "deviceId": device_id,
-                    "teamId": team_id,
-                    "agentId": agent_id,
-                }
-            )
-        )
-
-    def message(
-        self,
-        agent_id: str,
-        frm: str,
-        to: Optional[str],
-        team_id: Optional[str] = None,
-        device_id: Optional[str] = None,
-        op: str = "send",
-        msg_type: Optional[str] = None,
-        body: Any = None,
-        size: Optional[int] = None,
-        tool: Optional[str] = None,
+        label: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
-        correlation_id: Optional[str] = None,
     ) -> None:
-        event = _drop_none(
-            {
-                "kind": "message",
-                "deviceId": device_id,
-                "teamId": team_id,
-                "agentId": agent_id,
-                "op": op,
-                "from": frm,
-                "msgType": msg_type,
-                "body": body,
-                "size": size,
-                "tool": tool,
-                "taskId": task_id,
-                "traceId": trace_id,
-                "correlationId": correlation_id,
-            }
-        )
-        # 'to' must always be present (None = broadcast); the collector requires the
-        # key to exist, so it bypasses _drop_none which would otherwise strip None.
-        event["to"] = to
-        self.emit(event)
+        """Agent comes online — call at startup so it appears in the topology immediately."""
+        self.emit(_drop_none({
+            "kind": "agent", "phase": "start",
+            "agentId": agent_id, "role": role, "label": label,
+            "taskId": task_id, "traceId": trace_id,
+        }))
 
-    def blackboard_write(
+    def agent_end(
         self,
-        agent_id: str,
+        agent_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> None:
+        """Agent goes offline."""
+        self.emit(_drop_none({
+            "kind": "agent", "phase": "end",
+            "agentId": agent_id, "taskId": task_id,
+        }))
+
+    # ---- Tool ----
+
+    def tool_start(
+        self,
+        tool: str,
+        agent_id: Optional[str] = None,
+        input: Any = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Mark the agent as busy with a tool."""
+        self.emit(_drop_none({
+            "kind": "tool", "phase": "start",
+            "agentId": agent_id, "tool": tool,
+            "input": input, "taskId": task_id, "traceId": trace_id,
+        }))
+
+    def tool_end(
+        self,
+        tool: str,
+        agent_id: Optional[str] = None,
+        status: Optional[str] = None,
+        output: Any = None,
+        summary: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Release the busy state and record the result."""
+        self.emit(_drop_none({
+            "kind": "tool", "phase": "end",
+            "agentId": agent_id, "tool": tool,
+            "status": status, "output": output, "summary": summary,
+            "taskId": task_id, "traceId": trace_id,
+        }))
+
+    # ---- Delegate ----
+
+    def dispatch(
+        self,
+        frm: str,
+        to: str,
+        agent_id: Optional[str] = None,
+        task: Optional[str] = None,
+        payload: Any = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Dispatch work to another agent."""
+        self.emit(_drop_none({
+            "kind": "delegate", "phase": "dispatch",
+            "agentId": agent_id or frm, "from": frm, "to": to,
+            "task": task, "payload": payload,
+            "taskId": task_id, "traceId": trace_id,
+        }))
+
+    def delegate_return(
+        self,
+        frm: str,
+        to: str,
+        agent_id: Optional[str] = None,
+        payload: Any = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Return results to the delegating agent."""
+        self.emit(_drop_none({
+            "kind": "delegate", "phase": "return",
+            "agentId": agent_id or frm, "from": frm, "to": to,
+            "payload": payload, "taskId": task_id, "traceId": trace_id,
+        }))
+
+    # ---- Blackboard ----
+
+    def bb_write(
+        self,
         key: str,
         value: Any = None,
-        team_id: Optional[str] = None,
-        device_id: Optional[str] = None,
-        version: Optional[int] = None,
-        tool: Optional[str] = None,
+        agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
     ) -> None:
-        self.emit(
-            _drop_none(
-                {
-                    "kind": "blackboard",
-                    "op": "write",
-                    "deviceId": device_id,
-                    "teamId": team_id,
-                    "agentId": agent_id,
-                    "key": key,
-                    "value": value,
-                    "version": version,
-                    "tool": tool,
-                    "taskId": task_id,
-                    "traceId": trace_id,
-                }
-            )
-        )
+        """Write a value to the shared blackboard."""
+        self.emit(_drop_none({
+            "kind": "blackboard", "op": "write",
+            "agentId": agent_id, "key": key, "value": value,
+            "taskId": task_id, "traceId": trace_id,
+        }))
 
-    def blackboard_read(
+    def bb_read(
         self,
-        agent_id: str,
         key: str,
-        team_id: Optional[str] = None,
-        device_id: Optional[str] = None,
-        tool: Optional[str] = None,
+        agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
     ) -> None:
-        self.emit(
-            _drop_none(
-                {
-                    "kind": "blackboard",
-                    "op": "read",
-                    "deviceId": device_id,
-                    "teamId": team_id,
-                    "agentId": agent_id,
-                    "key": key,
-                    "tool": tool,
-                    "taskId": task_id,
-                    "traceId": trace_id,
-                }
-            )
-        )
+        """Read a value from the shared blackboard."""
+        self.emit(_drop_none({
+            "kind": "blackboard", "op": "read",
+            "agentId": agent_id, "key": key,
+            "taskId": task_id, "traceId": trace_id,
+        }))
 
-    def tool(
+    # ---- Noti ----
+
+    def broadcast(
         self,
-        agent_id: str,
-        tool: str,
-        phase: Optional[str] = None,
-        status: Optional[str] = None,
-        summary: Optional[str] = None,
-        team_id: Optional[str] = None,
-        device_id: Optional[str] = None,
+        frm: str,
+        to: Union[str, List[str]],
+        agent_id: Optional[str] = None,
+        key: Optional[str] = None,
+        message: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
     ) -> None:
-        """Record a tool invocation. Pass phase="start"/"end" to bracket long-running
-        tools so the UI shows the agent busy meanwhile; a single call is fine for a
-        quick tool (the busy state expires on its own)."""
-        self.emit(
-            _drop_none(
-                {
-                    "kind": "tool",
-                    "deviceId": device_id,
-                    "teamId": team_id,
-                    "agentId": agent_id,
-                    "tool": tool,
-                    "phase": phase,
-                    "status": status,
-                    "summary": summary,
-                    "taskId": task_id,
-                    "traceId": trace_id,
-                }
-            )
-        )
+        """Broadcast to agents: 'check the blackboard at `key`'."""
+        self.emit(_drop_none({
+            "kind": "noti", "phase": "broadcast",
+            "agentId": agent_id or frm, "from": frm, "to": to,
+            "key": key, "message": message,
+            "taskId": task_id, "traceId": trace_id,
+        }))
+
+    def ack(
+        self,
+        frm: str,
+        to: str,
+        agent_id: Optional[str] = None,
+        key: Optional[str] = None,
+        message: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Acknowledge a broadcast: 'I've read and responded to `key`'."""
+        self.emit(_drop_none({
+            "kind": "noti", "phase": "ack",
+            "agentId": agent_id or frm, "from": frm, "to": to,
+            "key": key, "message": message,
+            "taskId": task_id, "traceId": trace_id,
+        }))
+
+    # ---- Task (Hub only) ----
+
+    def task_input(
+        self,
+        request: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        scenario: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Hub receives a task from the user."""
+        self.emit(_drop_none({
+            "kind": "task", "phase": "input",
+            "agentId": agent_id, "request": request,
+            "scenario": scenario, "taskId": task_id, "traceId": trace_id,
+        }))
+
+    def task_output(
+        self,
+        result: Any = None,
+        agent_id: Optional[str] = None,
+        scenario: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Hub returns the final result to the user."""
+        self.emit(_drop_none({
+            "kind": "task", "phase": "output",
+            "agentId": agent_id, "result": result,
+            "scenario": scenario, "taskId": task_id, "traceId": trace_id,
+        }))
+
+    # ---- flush / close ----
 
     def flush(self) -> None:
         with self._lock:
@@ -250,9 +283,9 @@ class AgentFlowClient:
             self._queue = []
         try:
             self._sender(self._url, json.dumps(batch).encode("utf-8"))
-        except Exception as err:  # re-queue (bounded) on failure
+        except Exception as err:
             with self._lock:
-                self._queue = (batch + self._queue)[-self._max_queue :]
+                self._queue = (batch + self._queue)[-self._max_queue:]
             if self._on_error:
                 self._on_error(err)
 
@@ -268,6 +301,7 @@ class AgentFlowClient:
         self.flush()
 
     # ---- internals ----
+
     def _loop(self) -> None:
         while not self._stop.wait(self._flush_interval):
             self.flush()
