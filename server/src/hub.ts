@@ -4,8 +4,8 @@ import { DEFAULT_SPACE } from "./types.js";
 import { RingBuffer } from "./ringBuffer.js";
 
 interface Subscription {
-  space: string; // the workspace this client is viewing
-  taskId: string | null; // focused task within that space (null = presence + summaries only)
+  space: string;
+  taskId: string | null;
 }
 
 interface TaskAgg {
@@ -13,28 +13,23 @@ interface TaskAgg {
   firstTs: number;
   lastTs: number;
   count: number;
-  messages: number;
+  delegates: number;
   blackboard: number;
   tools: number;
-  devices: Set<string>;
+  notis: number;
   agents: Set<string>;
+  scenario?: string;
 }
 
 interface SpaceState {
   buffer: RingBuffer<FlowEvent>;
-  presence: Map<string, FlowEvent>; // latest agent event per agent id
+  presence: Map<string, FlowEvent>; // latest agent event per agentId
   tasks: Map<string, TaskAgg>;
   lastTs: number;
 }
 
 const MAX_TASKS_SENT = 100;
 
-/**
- * Multi-workspace fanout. Everything is partitioned by `space` (the top-level
- * isolation key), so concurrent testers never see each other's agents/tasks.
- * Within a space, scaling rules still apply: presence + task summaries are cheap
- * and always sent; a task's detail streams only to clients that focus it.
- */
 export class Hub {
   private clients = new Map<WebSocket, Subscription>();
   private spaces = new Map<string, SpaceState>();
@@ -80,11 +75,7 @@ export class Hub {
 
     ws.on("message", (raw) => {
       let msg: ClientMessage;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
+      try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === "join") {
         sub.space = msg.space || DEFAULT_SPACE;
         sub.taskId = null;
@@ -111,8 +102,9 @@ export class Hub {
     st.buffer.push(event);
     st.lastTs = event.ts;
     this.windowCount++;
+
     if (event.kind === "agent") {
-      st.presence.set(`${event.deviceId}/${event.teamId}/${event.agentId}`, event);
+      st.presence.set(event.agentId, event);
     }
     if (event.taskId) this.updateTask(st, event);
 
@@ -122,7 +114,6 @@ export class Hub {
     }
   }
 
-  /** Within the client's space: presence always; task detail only when focused. */
   private matches(sub: Subscription, e: FlowEvent): boolean {
     if (e.kind === "agent") return true;
     return sub.taskId != null && e.taskId === sub.taskId;
@@ -132,24 +123,23 @@ export class Hub {
     const id = e.taskId!;
     let t = st.tasks.get(id);
     if (!t) {
-      t = { taskId: id, firstTs: e.ts, lastTs: e.ts, count: 0, messages: 0, blackboard: 0, tools: 0, devices: new Set(), agents: new Set() };
+      t = { taskId: id, firstTs: e.ts, lastTs: e.ts, count: 0, delegates: 0, blackboard: 0, tools: 0, notis: 0, agents: new Set() };
       st.tasks.set(id, t);
     }
     t.lastTs = e.ts;
     t.count++;
-    if (e.kind === "message") t.messages++;
+    if (e.kind === "delegate") t.delegates++;
     else if (e.kind === "blackboard") t.blackboard++;
     else if (e.kind === "tool") t.tools++;
-    t.devices.add(e.deviceId);
-    t.agents.add(`${e.deviceId}/${e.teamId}/${e.agentId}`);
+    else if (e.kind === "noti") t.notis++;
+    else if (e.kind === "task" && e.scenario) t.scenario = e.scenario;
+    t.agents.add(e.agentId);
   }
 
-  /** Remove a single task (summary + its buffered events) from a space. */
   deleteTask(spaceName: string, taskId: string): void {
     const st = this.spaces.get(spaceName);
     if (!st || !st.tasks.delete(taskId)) return;
     st.buffer.removeWhere((e) => e.taskId === taskId);
-    // un-focus any client currently viewing the deleted task
     for (const [ws, sub] of this.clients) {
       if (sub.space === spaceName && sub.taskId === taskId) {
         sub.taskId = null;
@@ -159,7 +149,6 @@ export class Hub {
     this.pushTasks(spaceName);
   }
 
-  /** Wipe every task + buffered event in a space, keeping the agent roster (presence). */
   clearSpace(spaceName: string): void {
     const st = this.spaces.get(spaceName);
     if (!st) return;
@@ -168,13 +157,12 @@ export class Hub {
     for (const [ws, sub] of this.clients) {
       if (sub.space === spaceName) {
         sub.taskId = null;
-        this.sendSnapshot(ws, sub); // re-sync: presence only, no tasks
+        this.sendSnapshot(ws, sub);
       }
     }
     this.pushTasks(spaceName);
   }
 
-  /** Remove an entire workspace from the directory. Live traffic may recreate it. */
   deleteSpace(spaceName: string): void {
     if (!this.spaces.delete(spaceName)) return;
     for (const [ws, sub] of this.clients) {
@@ -187,7 +175,6 @@ export class Hub {
     this.broadcastAll(this.spacesMessage());
   }
 
-  /** Push the current task list to every client viewing the given space (immediate sync). */
   private pushTasks(spaceName: string): void {
     const data = JSON.stringify(this.tasksMessage(spaceName));
     for (const [ws, sub] of this.clients) {
@@ -206,11 +193,12 @@ export class Hub {
         firstTs: t.firstTs,
         lastTs: t.lastTs,
         count: t.count,
-        messages: t.messages,
+        delegates: t.delegates,
         blackboard: t.blackboard,
         tools: t.tools,
-        devices: [...t.devices],
-        agents: t.agents.size,
+        notis: t.notis,
+        agents: [...t.agents],
+        scenario: t.scenario,
       }));
     return { type: "tasks", tasks, total: all.length };
   }
@@ -223,15 +211,11 @@ export class Hub {
   }
 
   private broadcastTasks(): void {
-    // send each client the task list of the space it's viewing
     const cache = new Map<string, string>();
     for (const [ws, sub] of this.clients) {
       if (ws.readyState !== ws.OPEN) continue;
       let data = cache.get(sub.space);
-      if (!data) {
-        data = JSON.stringify(this.tasksMessage(sub.space));
-        cache.set(sub.space, data);
-      }
+      if (!data) { data = JSON.stringify(this.tasksMessage(sub.space)); cache.set(sub.space, data); }
       ws.send(data);
     }
   }
@@ -260,13 +244,7 @@ export class Hub {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   }
 
-  get clientCount(): number {
-    return this.clients.size;
-  }
-  get spaceCount(): number {
-    return this.spaces.size;
-  }
-  taskCount(space = DEFAULT_SPACE): number {
-    return this.spaces.get(space)?.tasks.size ?? 0;
-  }
+  get clientCount(): number { return this.clients.size; }
+  get spaceCount(): number { return this.spaces.size; }
+  taskCount(space = DEFAULT_SPACE): number { return this.spaces.get(space)?.tasks.size ?? 0; }
 }

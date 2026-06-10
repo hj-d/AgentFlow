@@ -1,100 +1,105 @@
-// Unified flow-event model shared conceptually with the web client.
-// Both the message server and the blackboard are normalized into FlowEvent.
+// AgentFlow — unified flow-event model.
+// 6 event kinds: agent · tool · delegate · blackboard · noti · task
 
-/** Reserved node id for the shared blackboard (rendered as a backbone node). */
 export const BLACKBOARD_ID = "__blackboard__";
-
-/** Default workspace when a producer/client doesn't specify one. */
 export const DEFAULT_SPACE = "default";
 
 export interface FlowEventBase {
-  /** ULID-ish unique id (server-assigned if omitted by producer). */
   eventId: string;
-  /** epoch ms, normalized to the collector clock. */
   ts: number;
-
-  // workspace — top-level isolation key (per test session / user).
-  // Tasks span devices, so the isolation boundary sits ABOVE deviceId.
   space?: string;
-
-  // hierarchical coordinates
-  deviceId: string;
-  teamId: string;
-  agentId: string; // the acting agent
-
-  // task — the merge key. Devices that learn a task_id correlate their work under it.
+  agentId: string;
   taskId?: string;
-
-  // causality — lets the UI stitch a single flow together
-  traceId?: string; // whole work flow
-  correlationId?: string; // request/response pairing
-  causedBy?: string; // previous eventId in the chain
-
-  tool?: string; // which tool produced this
+  traceId?: string;
+  causedBy?: string;
 }
 
-export interface MessageEvent extends FlowEventBase {
-  kind: "message";
-  op: "send" | "deliver";
-  from: string; // agentId
-  to: string | null; // agentId | topic | "broadcast"
-  msgType?: string;
-  body?: unknown; // actual payload (req: show data being sent)
-  size?: number;
-}
-
-export interface BlackboardEvent extends FlowEventBase {
-  kind: "blackboard";
-  op: "write" | "read" | "update" | "delete";
-  key: string; // the blackboard id
-  value?: unknown;
-  version?: number;
-}
-
-/** Agent lifecycle/presence — emitted when an agent starts (online) or stops (offline),
- *  so the topology shows the agent immediately, before it sends any traffic. */
+// Agent lifecycle — start when agent comes online, end when it goes offline.
 export interface AgentEvent extends FlowEventBase {
   kind: "agent";
-  status: "online" | "offline";
+  phase: "start" | "end";
   role?: string;
-  capabilities?: string[];
+  label?: string;
 }
 
-/** Tool use — an agent invoking a tool (search, code, browser, "thinking", …).
- *  Lets the UI show what an agent is *doing* between messages: a "start" marks
- *  the agent busy with `tool`; an optional "end" releases it (otherwise the UI
- *  lets the busy state expire on its own, so a missing "end" self-heals). */
+// Tool invocation — start marks the agent busy, end releases it.
 export interface ToolEvent extends FlowEventBase {
   kind: "tool";
-  tool: string; // tool name (required for tool events)
-  phase?: "start" | "end"; // default "start"
-  status?: "ok" | "error"; // optional outcome, for "end"
-  summary?: string; // optional human-readable note of what it did
+  tool: string;
+  phase: "start" | "end";
+  status?: "ok" | "error";
+  input?: unknown;
+  output?: unknown;
+  summary?: string;
 }
 
-export type FlowEvent = MessageEvent | BlackboardEvent | AgentEvent | ToolEvent;
+// Inter-agent delegation — dispatch sends work to another agent, return brings results back.
+export interface DelegateEvent extends FlowEventBase {
+  kind: "delegate";
+  phase: "dispatch" | "return";
+  from: string;
+  to: string;
+  task?: string;
+  payload?: unknown;
+}
 
-/** What producers may POST — eventId/ts are filled in by the collector if absent. */
+// Shared blackboard — read/write the key-value store shared across agents.
+export interface BlackboardEvent extends FlowEventBase {
+  kind: "blackboard";
+  op: "read" | "write";
+  key: string;
+  value?: unknown;
+}
+
+// Noti — broadcast tells other agents to check the blackboard;
+//         ack is the reply confirming the agent has read and responded.
+export interface NotiEvent extends FlowEventBase {
+  kind: "noti";
+  phase: "broadcast" | "ack";
+  from: string;
+  to: string | string[];
+  key?: string;
+  message?: string;
+}
+
+// Task — input is an incoming user request (Hub only); output is the final result.
+export interface TaskEvent extends FlowEventBase {
+  kind: "task";
+  phase: "input" | "output";
+  request?: string;
+  result?: unknown;
+  scenario?: string;
+}
+
+export type FlowEvent =
+  | AgentEvent
+  | ToolEvent
+  | DelegateEvent
+  | BlackboardEvent
+  | NotiEvent
+  | TaskEvent;
+
 export type FlowEventInput =
-  | (Omit<MessageEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
-  | (Omit<BlackboardEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
   | (Omit<AgentEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
-  | (Omit<ToolEvent, "eventId" | "ts"> & { eventId?: string; ts?: number });
+  | (Omit<ToolEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
+  | (Omit<DelegateEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
+  | (Omit<BlackboardEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
+  | (Omit<NotiEvent, "eventId" | "ts"> & { eventId?: string; ts?: number })
+  | (Omit<TaskEvent, "eventId" | "ts"> & { eventId?: string; ts?: number });
 
-/** Server-side aggregate for one task — cheap to send regardless of event volume. */
 export interface TaskSummary {
   taskId: string;
   firstTs: number;
   lastTs: number;
-  count: number; // total events
-  messages: number;
+  count: number;
+  delegates: number;
   blackboard: number;
   tools: number;
-  devices: string[];
-  agents: number; // distinct agents involved
+  notis: number;
+  agents: string[];
+  scenario?: string;
 }
 
-/** Aggregate per workspace — lets the UI offer a directory of active sessions. */
 export interface SpaceSummary {
   space: string;
   agents: number;
@@ -103,18 +108,16 @@ export interface SpaceSummary {
 }
 
 // ---- WebSocket protocol ----
-// server -> client
 export type ServerMessage =
-  | { type: "snapshot"; events: FlowEvent[]; space: string; taskId: string | null } // scoped re-sync
+  | { type: "snapshot"; events: FlowEvent[]; space: string; taskId: string | null }
   | { type: "event"; event: FlowEvent }
-  | { type: "tasks"; tasks: TaskSummary[]; total: number } // task list for the client's space
-  | { type: "spaces"; spaces: SpaceSummary[] } // directory of all workspaces
+  | { type: "tasks"; tasks: TaskSummary[]; total: number }
+  | { type: "spaces"; spaces: SpaceSummary[] }
   | { type: "stats"; connected: number; rate: number };
 
-// client -> server
 export type ClientMessage =
-  | { type: "join"; space: string } // switch the workspace this client is viewing
+  | { type: "join"; space: string }
   | { type: "subscribeTask"; taskId: string | null }
-  | { type: "deleteTask"; taskId: string } // drop one task from the client's current space
-  | { type: "clearSpace" } // wipe all tasks/events in the current space (presence kept)
-  | { type: "deleteSpace"; space: string }; // remove an entire workspace
+  | { type: "deleteTask"; taskId: string }
+  | { type: "clearSpace" }
+  | { type: "deleteSpace"; space: string };

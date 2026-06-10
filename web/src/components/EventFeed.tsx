@@ -7,73 +7,72 @@ function fmtTime(ts: number): string {
   return d.toLocaleTimeString("en-GB", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
 }
 
-function short(id: string): string {
-  const parts = id.split("/");
-  return parts.length === 3 ? `${parts[1]}/${parts[2]}` : id;
-}
-
 function summarize(e: FlowEvent): string {
-  if (e.kind === "message") {
-    return `${short(e.from)} → ${e.to ? short(e.to) : "?"}  [${e.msgType ?? "msg"}]`;
+  switch (e.kind) {
+    case "agent":
+      return `${e.agentId} ${e.phase === "start" ? "came online" : "went offline"}${e.role ? ` (${e.role})` : ""}`;
+    case "tool": {
+      const mark = e.phase === "end" ? (e.status === "error" ? " ✗" : " ✓") : " …";
+      return `${e.agentId} ⚙ ${e.tool}${mark}`;
+    }
+    case "delegate":
+      return `${e.from} → ${e.to}  [${e.phase}]${e.task ? "  " + e.task.slice(0, 40) : ""}`;
+    case "blackboard":
+      return `${e.agentId} ${e.op.toUpperCase()} ${e.key}`;
+    case "noti": {
+      const to = Array.isArray(e.to) ? e.to.join(", ") : e.to;
+      return `${e.from} → ${to}  [${e.phase}]${e.key ? "  " + e.key : ""}`;
+    }
+    case "task":
+      return `Task ${e.phase.toUpperCase()}${e.request ? "  " + e.request.slice(0, 40) : ""}${e.scenario ? "  (" + e.scenario + ")" : ""}`;
   }
-  if (e.kind === "blackboard") {
-    return `${e.op.toUpperCase()} ${e.key}`;
-  }
-  if (e.kind === "tool") {
-    const mark = e.phase === "end" ? (e.status === "error" ? " ✗" : " ✓") : " …";
-    return `${short(e.agentId)} ⚙ ${e.tool}${mark}${e.summary ? "  " + e.summary : ""}`;
-  }
-  return `${e.status.toUpperCase()} ${e.agentId}${e.role ? " (" + e.role + ")" : ""}`;
 }
 
-const BADGE: Record<FlowEvent["kind"], string> = { message: "MSG", blackboard: "BB", agent: "AGT", tool: "TOOL" };
+function payload(e: FlowEvent): unknown {
+  if (e.kind === "delegate") return e.payload;
+  if (e.kind === "blackboard") return e.value;
+  if (e.kind === "tool" && e.phase === "end") return e.output;
+  if (e.kind === "task") return e.result ?? e.request;
+  return undefined;
+}
+
+const BADGE_TEXT: Record<FlowEvent["kind"], string> = {
+  agent: "AGENT", tool: "TOOL", delegate: "DELG", blackboard: "BB", noti: "NOTI", task: "TASK",
+};
 
 export function EventFeed() {
   const events = useStore((s) => s.events);
-  const filters = useStore((s) => s.filters);
   const selectedTask = useStore((s) => s.selectedTask);
   const selectTask = useStore((s) => s.selectTask);
 
   const filtered = useMemo(() => {
-    const text = filters.text.toLowerCase();
     return events.filter((e) => {
-      // Show ONLY the focused task's own actions. The store also holds global
-      // agent-presence events (needed to render the topology roster); those carry
-      // no taskId and would otherwise clutter this feed with unrelated online/offline noise.
-      if (selectedTask && e.taskId !== selectedTask) return false;
-      if (filters.kind !== "all" && e.kind !== filters.kind) return false;
-      if (filters.device && e.deviceId !== filters.device) return false;
-      if (filters.team && e.teamId !== filters.team) return false;
-      if (text) {
-        const hay = JSON.stringify(e).toLowerCase();
-        if (!hay.includes(text)) return false;
-      }
+      if (selectedTask && e.kind !== "agent" && e.taskId !== selectedTask) return false;
       return true;
     });
-  }, [events, filters, selectedTask]);
-
-  if (!selectedTask) {
-    return <div className="empty small">왼쪽에서 task를 선택하면 그 task의 이벤트가 표시됩니다.</div>;
-  }
+  }, [events, selectedTask]);
 
   return (
-    <div className="feed">
-      {filtered.length === 0 && <div className="empty small">이벤트 없음</div>}
+    <div className="event-feed">
+      {filtered.length === 0 && (
+        <div className="event-feed-empty">
+          {selectedTask ? "이 Task의 이벤트 없음" : "이벤트 없음 — task를 선택하거나 시뮬레이터를 실행하세요"}
+        </div>
+      )}
       {filtered.map((e) => {
-        const payload = e.kind === "message" ? e.body : e.kind === "blackboard" ? e.value : undefined;
+        const p = payload(e);
+        const pStr = p !== undefined ? (typeof p === "string" ? p : JSON.stringify(p)) : "";
         return (
           <div
             key={e.eventId}
-            className={"feed-row " + e.kind}
+            className="feed-row"
             onClick={() => e.taskId && selectTask(e.taskId)}
             title={e.taskId ? `task: ${e.taskId}` : ""}
           >
-            <span className="t">{fmtTime(e.ts)}</span>
-            <span className={"badge " + e.kind}>{BADGE[e.kind]}</span>
-            <span className="summary">{summarize(e)}</span>
-            {/* tool-kind events already show the tool in their summary; avoid the duplicate chip */}
-            {e.kind !== "tool" && e.tool && <span className="tool">{e.tool}</span>}
-            {payload !== undefined && <span className="payload">{JSON.stringify(payload)}</span>}
+            <span className="feed-time">{fmtTime(e.ts)}</span>
+            <span className={`badge ${e.kind}`}>{BADGE_TEXT[e.kind]}</span>
+            <span className="feed-summary">{summarize(e)}</span>
+            {pStr && <span className="feed-payload">{pStr.slice(0, 60)}</span>}
           </div>
         );
       })}

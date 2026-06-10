@@ -1,69 +1,86 @@
-// Mirror of the server's event model (kept in sync manually).
+// Mirror of server/src/types.ts — keep in sync manually.
 
-/** Reserved node id for the shared blackboard (rendered as a backbone node). */
 export const BLACKBOARD_ID = "__blackboard__";
 
 export interface FlowEventBase {
   eventId: string;
   ts: number;
-  deviceId: string;
-  teamId: string;
+  space?: string;
   agentId: string;
-  space?: string; // workspace (top-level isolation key)
-  taskId?: string; // the merge key — correlates work across devices
+  taskId?: string;
   traceId?: string;
-  correlationId?: string;
   causedBy?: string;
-  tool?: string;
-}
-
-export interface MessageEvent extends FlowEventBase {
-  kind: "message";
-  op: "send" | "deliver";
-  from: string;
-  to: string | null;
-  msgType?: string;
-  body?: unknown;
-  size?: number;
-}
-
-export interface BlackboardEvent extends FlowEventBase {
-  kind: "blackboard";
-  op: "write" | "read" | "update" | "delete";
-  key: string;
-  value?: unknown;
-  version?: number;
 }
 
 export interface AgentEvent extends FlowEventBase {
   kind: "agent";
-  status: "online" | "offline";
+  phase: "start" | "end";
   role?: string;
-  capabilities?: string[];
+  label?: string;
 }
 
-/** Tool use — an agent invoking a tool. Drives the "what is this agent doing now"
- *  busy indicator in the topology. "start" marks busy; "end" releases. */
 export interface ToolEvent extends FlowEventBase {
   kind: "tool";
   tool: string;
-  phase?: "start" | "end";
+  phase: "start" | "end";
   status?: "ok" | "error";
+  input?: unknown;
+  output?: unknown;
   summary?: string;
 }
 
-export type FlowEvent = MessageEvent | BlackboardEvent | AgentEvent | ToolEvent;
+export interface DelegateEvent extends FlowEventBase {
+  kind: "delegate";
+  phase: "dispatch" | "return";
+  from: string;
+  to: string;
+  task?: string;
+  payload?: unknown;
+}
+
+export interface BlackboardEvent extends FlowEventBase {
+  kind: "blackboard";
+  op: "read" | "write";
+  key: string;
+  value?: unknown;
+}
+
+export interface NotiEvent extends FlowEventBase {
+  kind: "noti";
+  phase: "broadcast" | "ack";
+  from: string;
+  to: string | string[];
+  key?: string;
+  message?: string;
+}
+
+export interface TaskEvent extends FlowEventBase {
+  kind: "task";
+  phase: "input" | "output";
+  request?: string;
+  result?: unknown;
+  scenario?: string;
+}
+
+export type FlowEvent =
+  | AgentEvent
+  | ToolEvent
+  | DelegateEvent
+  | BlackboardEvent
+  | NotiEvent
+  | TaskEvent;
 
 export interface TaskSummary {
   taskId: string;
   firstTs: number;
   lastTs: number;
   count: number;
-  messages: number;
+  delegates: number;
   blackboard: number;
   tools: number;
-  devices: string[];
-  agents: number;
+  notis: number;
+  agents: string[];
+  scenario?: string;
 }
 
 export interface SpaceSummary {
@@ -80,7 +97,6 @@ export type ServerMessage =
   | { type: "spaces"; spaces: SpaceSummary[] }
   | { type: "stats"; connected: number; rate: number };
 
-/** client -> server control messages (delete/clear). Mirrors the server's ClientMessage. */
 export type ClientControl =
   | { type: "deleteTask"; taskId: string }
   | { type: "clearSpace" }
