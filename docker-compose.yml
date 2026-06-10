@@ -22,11 +22,9 @@ services:
     command: ["node", "dist/simulator.js"]
     environment:
       - INGEST_URL=http://server:3001/ingest
-      # slow, easy-to-follow pacing (see server/src/simulator.ts for all knobs)
-      - SIM_INTERVAL_MS=1500
-      - SIM_MAX_ACTIVE=2
-      - SIM_SPAWN_PROB=0.25
-      - SPACES=alice,bob
+      # 3 sec per step — simulates LLM thinking time
+      - SIM_INTERVAL_MS=3000
+      - SPACES=demo
     depends_on:
       - server
     profiles: ["demo"]

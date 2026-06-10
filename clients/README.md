@@ -22,7 +22,7 @@ your agent  ──emit()──▶  in-memory queue  ──batch POST──▶  /
 
 ---
 
-## 6가지 이벤트
+## 7가지 이벤트
 
 | 이벤트 | 의미 |
 |--------|------|
@@ -32,6 +32,7 @@ your agent  ──emit()──▶  in-memory queue  ──batch POST──▶  /
 | `blackboard` | 공유 상태 읽기/쓰기 |
 | `noti` | 블랙보드 변경 알림 (broadcast/ack) |
 | `task` | 사용자 작업 입력/결과 (Hub 전용) |
+| `message` | 에이전트 내부 상태 메시지 (Agent 대화 패널에 표시) |
 
 ---
 
@@ -318,6 +319,15 @@ af.close()
 ```json
 { "kind": "task", "agentId": "hub", "phase": "input",  "request": "영상 만들어줘", "scenario": "scenario-1", "taskId": "t-1" }
 { "kind": "task", "agentId": "hub", "phase": "output", "result": { "video": "out.mp4" },                       "taskId": "t-1" }
+```
+
+### message
+
+에이전트가 지금 무엇을 하고 있는지 대화 형식으로 설명합니다. Agent 대화 패널에 채팅 말풍선으로 표시됩니다.
+
+```json
+{ "kind": "message", "agentId": "hub",  "title": "계획 수립 중 🧠",     "content": "TV→음악 취향, PC→영상 편집 순으로 처리할게.", "taskId": "t-1" }
+{ "kind": "message", "agentId": "pc",   "title": "영상 편집 시작! ✂️", "content": "사진 28장으로 생일 영상을 만들기 시작할게.", "taskId": "t-1" }
 ```
 
 ---

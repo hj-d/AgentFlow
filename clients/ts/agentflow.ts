@@ -1,7 +1,7 @@
 /**
  * AgentFlow SDK — TypeScript/Node (drop-in, zero dependencies).
  *
- * 6 event kinds: agent · tool · delegate · blackboard · noti · task
+ * 7 event kinds: agent · tool · delegate · blackboard · noti · task · message
  * Events are batched and sent fire-and-forget; a collector outage never
  * throws into your agent logic.
  *
@@ -79,13 +79,20 @@ export interface TaskEventInput extends EventBase {
   scenario?: string;
 }
 
+export interface MessageEventInput extends EventBase {
+  kind: "message";
+  title: string;
+  content: string;
+}
+
 export type FlowEventInput =
   | AgentEventInput
   | ToolEventInput
   | DelegateEventInput
   | BlackboardEventInput
   | NotiEventInput
-  | TaskEventInput;
+  | TaskEventInput
+  | MessageEventInput;
 
 // ---- client options ----
 
@@ -217,6 +224,13 @@ export class AgentFlowClient {
   /** Hub returns the final result to the user. */
   taskOutput(e: Omit<TaskEventInput, "kind" | "phase">): void {
     this.emit({ kind: "task", phase: "output", ...e });
+  }
+
+  // ---- Message (agent internal log / status) ----
+
+  /** Agent narrates what it's doing — shown in the Agent 대화 panel. */
+  message(e: Omit<MessageEventInput, "kind">): void {
+    this.emit({ kind: "message", ...e });
   }
 
   // ---- flush / close ----

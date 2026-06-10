@@ -1,7 +1,7 @@
 """
 AgentFlow SDK — Python (stdlib only, drop-in, zero dependencies).
 
-6 event kinds: agent · tool · delegate · blackboard · noti · task
+7 event kinds: agent · tool · delegate · blackboard · noti · task · message
 Events are batched and sent from a background thread; a collector outage
 never raises into your agent logic.
 
@@ -271,6 +271,23 @@ class AgentFlowClient:
             "kind": "task", "phase": "output",
             "agentId": agent_id, "result": result,
             "scenario": scenario, "taskId": task_id, "traceId": trace_id,
+        }))
+
+    # ---- Message (agent internal narration) ----
+
+    def message(
+        self,
+        title: str,
+        content: str,
+        agent_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """Agent narrates what it's doing — shown in the Agent 대화 panel."""
+        self.emit(_drop_none({
+            "kind": "message",
+            "agentId": agent_id, "title": title, "content": content,
+            "taskId": task_id, "traceId": trace_id,
         }))
 
     # ---- flush / close ----

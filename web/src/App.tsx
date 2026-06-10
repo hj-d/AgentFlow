@@ -13,16 +13,20 @@ export default function App() {
   const setPaused = useStore((s) => s.setPaused);
   const currentTask = useStore((s) => s.selectedTask);
   const selectTask = useStore((s) => s.selectTask);
+  const isReplaying = useStore((s) => s.isReplaying);
+  const stopReplay = useStore((s) => s.stopReplay);
 
   useEffect(() => connect(), []);
 
+  // Replay interval — slower during replay mode so steps are visible
   useEffect(() => {
+    const interval = isReplaying ? 700 : REPLAY_INTERVAL_MS;
     const id = setInterval(() => {
       const s = useStore.getState();
       if (s.replayQueue.length) s.replayNext();
-    }, REPLAY_INTERVAL_MS);
+    }, interval);
     return () => clearInterval(id);
-  }, []);
+  }, [isReplaying]);
 
   return (
     <div className="app">
@@ -34,10 +38,17 @@ export default function App() {
         </div>
         <SpaceSwitcher />
         <div className="topbar-right">
+          {isReplaying && (
+            <div className="replay-indicator">
+              <span className="replay-dot" />
+              <span>REPLAY</span>
+              <button className="replay-stop-btn" onClick={stopReplay}>⏹ 중지</button>
+            </div>
+          )}
           <span className={"conn-dot " + (connected ? "on" : "off")} />
           <span className="conn-label">{connected ? "connected" : "disconnected"}</span>
           {rate > 0 && <span className="rate-badge">{rate}/s</span>}
-          {currentTask && (
+          {currentTask && !isReplaying && (
             <button className="task-chip" onClick={() => selectTask(null)}>
               {currentTask} ✕
             </button>
@@ -54,8 +65,8 @@ export default function App() {
       <main className="three-col">
         <section className="panel delegate-panel">
           <div className="panel-header">
-            <span className="panel-title">Delegate Log</span>
-            <span className="panel-hint">Agent 간 위임 내역</span>
+            <span className="panel-title">Agent 대화</span>
+            <span className="panel-hint">실시간 대화 흐름</span>
           </div>
           <DelegateLog />
         </section>

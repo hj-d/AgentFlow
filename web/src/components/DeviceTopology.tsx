@@ -1,18 +1,74 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import {
   useStore, ACTIVITY_TTL_MS, EDGE_TTL_MS, THINKING_TTL_MS,
-  type PulseFlow, type EdgeState,
+  type PulseFlow, type EdgeState, type TaskIO,
 } from "../store";
+import type { FlowEvent } from "../types";
 
 interface CardPos { x: number; y: number; w: number; h: number; cx: number; cy: number }
 
-const AGENTS = [
+const AGENTS: { id: string; name: string; role: string; cls: "pc" | "hub" | "tv" }[] = [
   { id: "pc",  name: "PC Agent", role: "Creator",      cls: "pc" },
   { id: "hub", name: "HomeHub",  role: "Orchestrator", cls: "hub" },
   { id: "tv",  name: "TV Agent", role: "Display",      cls: "tv" },
 ];
 
 const PULSE_DUR = 1000;
+
+// ---- Format helpers ----
+function fmtTaskResult(result: unknown): string {
+  if (!result) return "완료";
+  if (typeof result === "string") return result;
+  if (typeof result !== "object") return String(result);
+  const r = result as Record<string, unknown>;
+  if (typeof r.message === "string") return r.message;
+  const parts: string[] = [];
+  if (r.video || r.file) parts.push(`🎬 ${r.video ?? r.file}`);
+  if (r.duration) parts.push(`⏱ ${r.duration}`);
+  return parts.join("  ·  ") || JSON.stringify(r).slice(0, 80);
+}
+
+// ---- Task I/O — horizontal directional layout ----
+function TaskIOSection({ taskIO }: { taskIO: TaskIO | null }) {
+  if (!taskIO?.request) return null;
+  const scenLabel = taskIO.scenario === "scenario-1" ? "S1"
+    : taskIO.scenario === "scenario-2" ? "S2"
+    : (taskIO.scenario ?? null);
+  const hasResult = taskIO.result != null;
+
+  return (
+    <div className="tio-section">
+      <div className={`tio-request ${hasResult ? "has-result" : ""}`}>
+        <div className="tio-header in">
+          <span className="tio-dir">📥</span>
+          <span className="tio-lbl">User Request</span>
+          {scenLabel && <span className="tio-scen">{scenLabel}</span>}
+          <span className="tio-arrow-badge">→</span>
+        </div>
+        <div className="tio-text">{taskIO.request}</div>
+      </div>
+
+      {hasResult ? (
+        <div className="tio-response">
+          <div className="tio-header out">
+            <span className="tio-arrow-badge">←</span>
+            <span className="tio-lbl">Hub Response</span>
+            <span className="tio-done">✅</span>
+            <span className="tio-dir">📤</span>
+          </div>
+          <div className="tio-text">{fmtTaskResult(taskIO.result)}</div>
+        </div>
+      ) : (
+        <div className="tio-processing">
+          <div className="tio-processing-dots">
+            <span /><span /><span />
+          </div>
+          <div className="tio-processing-label">Hub 처리 중...</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---- Thinking dots ----
 function ThinkDots({ cls = "" }: { cls?: string }) {
@@ -24,9 +80,7 @@ function ThinkDots({ cls = "" }: { cls?: string }) {
 }
 
 // ---- PC Monitor ----
-function PCCard({ online, thinking, busy, toolName }: {
-  online: boolean; thinking: boolean; busy: boolean; toolName?: string;
-}) {
+function PCIllus({ thinking, busy, toolName }: { thinking: boolean; busy: boolean; toolName?: string }) {
   return (
     <div className="dev-illus pc-illus">
       <div className={`pc-monitor ${busy ? "busy" : ""}`}>
@@ -46,10 +100,8 @@ function PCCard({ online, thinking, busy, toolName }: {
 }
 
 // ---- Hub Router ----
-function HubCard({ online, thinking, busy, toolName }: {
-  online: boolean; thinking: boolean; busy: boolean; toolName?: string;
-}) {
-  const s = thinking ? "think" : busy ? "busy" : online ? "on" : "off";
+function HubIllus({ thinking, busy, toolName }: { thinking: boolean; busy: boolean; toolName?: string }) {
+  const s = thinking ? "think" : busy ? "busy" : "on";
   return (
     <div className="dev-illus hub-illus">
       {thinking && <div className="hub-think-bubble"><ThinkDots cls="hub" /></div>}
@@ -69,9 +121,7 @@ function HubCard({ online, thinking, busy, toolName }: {
 }
 
 // ---- TV ----
-function TVCard({ online, thinking, busy, toolName }: {
-  online: boolean; thinking: boolean; busy: boolean; toolName?: string;
-}) {
+function TVIllus({ online, thinking, busy, toolName }: { online: boolean; thinking: boolean; busy: boolean; toolName?: string }) {
   return (
     <div className="dev-illus tv-illus">
       <div className={`tv-bezel ${busy ? "busy" : ""}`}>
@@ -92,13 +142,82 @@ function TVCard({ online, thinking, busy, toolName }: {
   );
 }
 
-// ============================================================
+// ---- Activity card system ----
+type ActItem = {
+  key: string;
+  kind: "tool" | "dispatch" | "return" | "bb-w" | "bb-r" | "msg";
+  icon: string;
+  typeLabel: string;
+  text: string;
+  cls: string;
+  detail: unknown;
+};
 
+function buildActivity(events: FlowEvent[], agentId: string, taskId: string | undefined): ActItem[] {
+  const items: ActItem[] = [];
+  for (const e of events) {
+    if (items.length >= 4) break;
+    if (taskId && e.taskId && e.taskId !== taskId) continue;
+
+    if (e.kind === "delegate") {
+      if (e.from === agentId) {
+        if (e.phase === "dispatch") {
+          const taskSnip = e.task ? `"${e.task.slice(0, 18)}${e.task.length > 18 ? "…" : ""}"` : `→ ${e.to}`;
+          items.push({ key: e.eventId, kind: "dispatch", icon: "→", typeLabel: `→ ${e.to}`, text: taskSnip, cls: "dispatch", detail: { task: e.task, to: e.to } });
+        } else if (e.phase === "return") {
+          items.push({ key: e.eventId, kind: "return", icon: "↩", typeLabel: `↩ ${e.to}`, text: "작업 완료 반환", cls: "return", detail: e.payload });
+        }
+      }
+      continue;
+    }
+    if (e.agentId !== agentId) continue;
+
+    if (e.kind === "tool" && e.phase === "end") {
+      items.push({
+        key: e.eventId,
+        kind: "tool",
+        icon: e.status === "error" ? "✗" : "✓",
+        typeLabel: "도구 실행",
+        text: e.tool,
+        cls: e.status === "error" ? "err" : "ok",
+        detail: e.output,
+      });
+    } else if (e.kind === "blackboard" && e.op === "write") {
+      items.push({ key: e.eventId, kind: "bb-w", icon: "✍", typeLabel: "BB 쓰기", text: e.key, cls: "bb-w", detail: e.value });
+    } else if (e.kind === "blackboard" && e.op === "read") {
+      items.push({ key: e.eventId, kind: "bb-r", icon: "📖", typeLabel: "BB 읽기", text: e.key, cls: "bb-r", detail: null });
+    }
+  }
+  return items;
+}
+
+function ActCard({ item }: { item: ActItem }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className={`act-card ${item.cls}${item.detail != null ? " clickable" : ""}`}
+      onClick={() => item.detail != null && setOpen((o) => !o)}
+    >
+      <div className="act-card-row">
+        <span className="act-card-type">{item.typeLabel}</span>
+        <span className={`act-card-icon ${item.cls}`}>{item.icon}</span>
+      </div>
+      <div className="act-card-text">{item.text.length > 22 ? item.text.slice(0, 21) + "…" : item.text}</div>
+      {open && item.detail != null && (
+        <pre className="act-card-detail">{JSON.stringify(item.detail, null, 2)}</pre>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 export function DeviceTopology() {
   const agents     = useStore((s) => s.agents);
   const pulses     = useStore((s) => s.pulses);
   const edges      = useStore((s) => s.edges);
   const blackboard = useStore((s) => s.blackboard);
+  const events     = useStore((s) => s.events);
+  const taskIO     = useStore((s) => s.taskIO);
   const expirePulses   = useStore((s) => s.expirePulses);
   const expireEdges    = useStore((s) => s.expireEdges);
   const expireActivity = useStore((s) => s.expireActivity);
@@ -110,7 +229,9 @@ export function DeviceTopology() {
   const [pos, setPos] = useState<Record<string, CardPos>>({});
   const [bbPos, setBbPos] = useState<CardPos | null>(null);
 
-  // RAF loop – pulses, edges, activity expiry
+  const taskId = taskIO?.taskId;
+
+  // RAF loop
   const rafRef = useRef<number>(0);
   useEffect(() => {
     const loop = () => {
@@ -155,7 +276,6 @@ export function DeviceTopology() {
   const wall = Date.now();
   const edgeList = useMemo(() => Object.values(edges), [edges]);
 
-  // Best recent edge between two abstract nodes
   function bestEdge(f: string, t: string): EdgeState | null {
     let best: EdgeState | null = null;
     for (const e of edgeList) {
@@ -197,19 +317,20 @@ export function DeviceTopology() {
     const cls = edge?.flow ?? ("idle" as PulseFlow | "idle");
     const x1 = a.cx, y1 = a.y + a.h;
     let x2 = bbPos.cx;
-    if (agentId === "pc")  x2 = bbPos.x + bbPos.w * 0.22;
-    if (agentId === "tv")  x2 = bbPos.x + bbPos.w * 0.78;
+    if (agentId === "pc")  x2 = bbPos.x + bbPos.w * 0.18;
+    if (agentId === "tv")  x2 = bbPos.x + bbPos.w * 0.82;
     const y2 = bbPos.y;
     const ym = y1 + (y2 - y1) * 0.45;
+    const dashArr = edge ? "none" : "6 4";
     return (
       <path key={`${agentId}→bb`}
         d={`M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`}
-        className={`topo-edge ${cls}`}
-        style={{ opacity: edge ? 0.25 + fresh(edge) * 0.65 : 0.18, strokeDasharray: !edge ? "5 3" : "none" }} />
+        className={`topo-edge ${cls} bb-cable`}
+        style={{ opacity: edge ? 0.35 + fresh(edge) * 0.55 : 0.18, strokeDasharray: dashArr }} />
     );
   }
 
-  // ---- Bezier point ----
+  // ---- Bezier ----
   function bz(x1: number, y1: number, cx1: number, cy1: number, cx2: number, cy2: number,
                x2: number, y2: number, t: number): [number, number] {
     const u = 1 - t;
@@ -230,8 +351,8 @@ export function DeviceTopology() {
       const bbP   = isWrite ? b : a;
       const agId  = isWrite ? from : to;
       let bbX = bbP.cx;
-      if (agId === "pc") bbX = bbP.x + bbP.w * 0.22;
-      if (agId === "tv") bbX = bbP.x + bbP.w * 0.78;
+      if (agId === "pc") bbX = bbP.x + bbP.w * 0.18;
+      if (agId === "tv") bbX = bbP.x + bbP.w * 0.82;
       const [x1, y1] = isWrite ? [agPos.cx, agPos.y + agPos.h] : [bbX, bbP.y];
       const [x2, y2] = isWrite ? [bbX, bbP.y] : [agPos.cx, agPos.y + agPos.h];
       const ym = y1 + (y2 - y1) * 0.45;
@@ -241,7 +362,6 @@ export function DeviceTopology() {
     return bz(x1, y1, mx, y1, mx, y2, x2, y2, t);
   }
 
-  // ---- Render pulses + labels ----
   function renderPulses() {
     return pulses.map((p) => {
       const t = Math.min(1, (now - p.start) / PULSE_DUR);
@@ -269,9 +389,9 @@ export function DeviceTopology() {
     });
   }
 
-  // ---- Blackboard topology card data ----
+  // ---- Blackboard entries ----
   const bbEntries = useMemo(() =>
-    Object.entries(blackboard).sort((a, b) => b[1].ts - a[1].ts).slice(0, 4),
+    Object.entries(blackboard).sort((a, b) => b[1].ts - a[1].ts).slice(0, 5),
     [blackboard]);
 
   function bbKeyState(key: string): "write" | "read" | null {
@@ -287,16 +407,27 @@ export function DeviceTopology() {
   function snip(v: unknown): string {
     if (v === undefined || v === null) return "—";
     const s = typeof v === "string" ? v : JSON.stringify(v);
-    return s.length > 22 ? s.slice(0, 21) + "…" : s;
+    return s.length > 26 ? s.slice(0, 25) + "…" : s;
   }
 
-  const containerH = containerRef.current?.offsetHeight ?? 460;
+  const bbActive = edgeList.some(e =>
+    (e.to === "__blackboard__" || e.from === "__blackboard__") && wall - e.ts < 2000
+  );
+
+  const containerH = containerRef.current?.offsetHeight ?? 540;
   const hasAnyAgent = AGENTS.some((a) => !!agents[a.id]);
+
+  // Per-agent activity items
+  const actItems = useMemo(() => ({
+    pc:  buildActivity(events, "pc",  taskId),
+    hub: buildActivity(events, "hub", taskId),
+    tv:  buildActivity(events, "tv",  taskId),
+  }), [events, taskId]);
 
   return (
     <div className="topology-scroll">
       <div className="topology-container" ref={containerRef}>
-        {/* SVG overlay – connections + pulses */}
+        {/* SVG overlay */}
         <svg className="topology-svg" width="100%" height={containerH}
           style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", overflow: "visible" }}>
           {hLine("pc", "hub")}
@@ -314,9 +445,15 @@ export function DeviceTopology() {
           </div>
         ) : (
           <>
-            {/* Agent cards */}
+            {/* Task I/O — horizontal directional area */}
+            <TaskIOSection taskIO={taskIO} />
+
+            {/* Agent groups row */}
             <div className="device-row">
-              {AGENTS.map((spec) => {
+
+              {/* ── PC: [activity-sidebar | card] ── */}
+              {(() => {
+                const spec = AGENTS[0]; // pc
                 const agent = agents[spec.id];
                 const online = agent ? agent.phase === "start" : false;
                 const thinking = !!(agent?.thinking && agent.thinkingTs && wall - agent.thinkingTs < THINKING_TTL_MS);
@@ -324,61 +461,180 @@ export function DeviceTopology() {
                 const toolName = agent?.activity?.tool;
                 const recentlyActive = !!(agent && wall - agent.lastSeen < 1500);
                 return (
-                  <div
-                    key={spec.id}
-                    ref={(el) => { cardRefs.current[spec.id] = el; }}
-                    className={[
-                      "device-card", spec.cls,
-                      recentlyActive ? "active" : "",
-                      !online && agent ? "offline" : "",
-                      thinking ? "thinking" : "",
-                      busy ? "busy" : "",
-                    ].filter(Boolean).join(" ")}
-                  >
-                    {spec.id === "pc"  && <PCCard  online={online} thinking={thinking} busy={busy} toolName={toolName} />}
-                    {spec.id === "hub" && <HubCard online={online} thinking={thinking} busy={busy} toolName={toolName} />}
-                    {spec.id === "tv"  && <TVCard  online={online} thinking={thinking} busy={busy} toolName={toolName} />}
-
-                    <div className="device-name-row">
-                      <span className="device-name">{spec.name}</span>
-                      <span className={`hb-dot ${online ? "alive" : agent ? "dead" : "dormant"}`} />
+                  <div className="device-group pc">
+                    {/* Activities — LEFT side of PC card */}
+                    <div className="act-sidebar left">
+                      {actItems.pc.length === 0 ? (
+                        <div className="act-sidebar-empty">대기 중</div>
+                      ) : (
+                        actItems.pc.map(item => <ActCard key={item.key} item={item} />)
+                      )}
                     </div>
-                    <div className="device-role">{spec.role}</div>
-                    <div className="device-color-bar" />
+                    {/* PC card */}
+                    <div
+                      ref={(el) => { cardRefs.current["pc"] = el; }}
+                      className={[
+                        "device-card", "pc",
+                        recentlyActive ? "active" : "",
+                        !online && agent ? "offline" : "",
+                        thinking ? "thinking" : "",
+                        busy ? "busy" : "",
+                      ].filter(Boolean).join(" ")}
+                    >
+                      <div className="device-status-bar">
+                        <span className={`hb-dot ${online ? "alive" : agent ? "dead" : "dormant"}`} />
+                        <span className="device-status-label">
+                          {thinking ? "thinking…" : busy ? `⚙ ${toolName ?? "working"}` : online ? "online" : "offline"}
+                        </span>
+                      </div>
+                      <PCIllus thinking={thinking} busy={busy} toolName={toolName} />
+                      <div className="device-info">
+                        <span className="device-name">{spec.name}</span>
+                        <span className="device-role-badge">{spec.role}</span>
+                      </div>
+                      <div className="device-color-bar" />
+                    </div>
                   </div>
                 );
-              })}
+              })()}
+
+              {/* ── HUB: elevated, orchestrator crown ── */}
+              {(() => {
+                const spec = AGENTS[1]; // hub
+                const agent = agents[spec.id];
+                const online = agent ? agent.phase === "start" : false;
+                const thinking = !!(agent?.thinking && agent.thinkingTs && wall - agent.thinkingTs < THINKING_TTL_MS);
+                const busy = !!(agent?.activity?.phase === "start" && wall - (agent.activity?.ts ?? 0) < ACTIVITY_TTL_MS);
+                const toolName = agent?.activity?.tool;
+                const recentlyActive = !!(agent && wall - agent.lastSeen < 1500);
+                return (
+                  <div className="device-group hub">
+                    {/* Orchestrator crown label */}
+                    <div className="hub-orch-crown">
+                      🎯 <span>Orchestrator</span>
+                    </div>
+                    {/* Hub card */}
+                    <div
+                      ref={(el) => { cardRefs.current["hub"] = el; }}
+                      className={[
+                        "device-card", "hub",
+                        recentlyActive ? "active" : "",
+                        !online && agent ? "offline" : "",
+                        thinking ? "thinking" : "",
+                        busy ? "busy" : "",
+                      ].filter(Boolean).join(" ")}
+                    >
+                      <div className="device-status-bar hub">
+                        <span className={`hb-dot ${online ? "alive" : agent ? "dead" : "dormant"}`} />
+                        <span className="device-status-label">
+                          {thinking ? "thinking…" : busy ? `⚙ ${toolName ?? "working"}` : online ? "online" : "offline"}
+                        </span>
+                      </div>
+                      <HubIllus thinking={thinking} busy={busy} toolName={toolName} />
+                      <div className="device-info">
+                        <span className="device-name">{spec.name}</span>
+                        <span className="device-role-badge orch">{spec.role}</span>
+                      </div>
+                      <div className="device-color-bar" />
+                    </div>
+                    {/* Hub activities — horizontal below card */}
+                    <div className="hub-act-row">
+                      {actItems.hub.map(item => <ActCard key={item.key} item={item} />)}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── TV: [card | activity-sidebar] ── */}
+              {(() => {
+                const spec = AGENTS[2]; // tv
+                const agent = agents[spec.id];
+                const online = agent ? agent.phase === "start" : false;
+                const thinking = !!(agent?.thinking && agent.thinkingTs && wall - agent.thinkingTs < THINKING_TTL_MS);
+                const busy = !!(agent?.activity?.phase === "start" && wall - (agent.activity?.ts ?? 0) < ACTIVITY_TTL_MS);
+                const toolName = agent?.activity?.tool;
+                const recentlyActive = !!(agent && wall - agent.lastSeen < 1500);
+                return (
+                  <div className="device-group tv">
+                    {/* TV card */}
+                    <div
+                      ref={(el) => { cardRefs.current["tv"] = el; }}
+                      className={[
+                        "device-card", "tv",
+                        recentlyActive ? "active" : "",
+                        !online && agent ? "offline" : "",
+                        thinking ? "thinking" : "",
+                        busy ? "busy" : "",
+                      ].filter(Boolean).join(" ")}
+                    >
+                      <div className="device-status-bar">
+                        <span className={`hb-dot ${online ? "alive" : agent ? "dead" : "dormant"}`} />
+                        <span className="device-status-label">
+                          {thinking ? "thinking…" : busy ? `⚙ ${toolName ?? "working"}` : online ? "online" : "offline"}
+                        </span>
+                      </div>
+                      <TVIllus online={online} thinking={thinking} busy={busy} toolName={toolName} />
+                      <div className="device-info">
+                        <span className="device-name">{spec.name}</span>
+                        <span className="device-role-badge">{spec.role}</span>
+                      </div>
+                      <div className="device-color-bar" />
+                    </div>
+                    {/* Activities — RIGHT side of TV card */}
+                    <div className="act-sidebar right">
+                      {actItems.tv.length === 0 ? (
+                        <div className="act-sidebar-empty">대기 중</div>
+                      ) : (
+                        actItems.tv.map(item => <ActCard key={item.key} item={item} />)
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
             </div>
 
-            {/* Blackboard node */}
-            <div className="bb-node-wrap">
-              <div className="bb-node-card" ref={bbRef}>
-                <div className="bb-node-head">
-                  <span className="bb-node-icon">📋</span>
-                  <span className="bb-node-title">Blackboard</span>
-                  {Object.keys(blackboard).length > 0 && (
-                    <span className="bb-node-cnt">{Object.keys(blackboard).length}</span>
+            {/* Blackboard Server — below, compact */}
+            <div className="bb-server-wrap">
+              <div className="bb-server" ref={bbRef}>
+                <div className="bb-rack-bar">
+                  <div className="bb-rack-leds">
+                    <span className="bb-rack-led pwr" />
+                    <span className={`bb-rack-led net ${bbActive ? "active" : ""}`} />
+                    <span className={`bb-rack-led hdd ${bbActive ? "active" : ""}`} />
+                  </div>
+                  <div className="bb-rack-label">BLACKBOARD SERVER</div>
+                  <div className="bb-rack-slot" />
+                </div>
+                <div className="bb-server-body">
+                  <div className="bb-server-head">
+                    <span className="bb-server-icon">🗄️</span>
+                    <div className="bb-server-title-wrap">
+                      <div className="bb-server-title">Shared State</div>
+                      <div className="bb-server-sub">Key-Value Store</div>
+                    </div>
+                    {Object.keys(blackboard).length > 0 && (
+                      <span className="bb-server-cnt">{Object.keys(blackboard).length} keys</span>
+                    )}
+                  </div>
+                  {bbEntries.length === 0 ? (
+                    <div className="bb-server-empty">No data — waiting for writes</div>
+                  ) : (
+                    <div className="bb-server-rows">
+                      {bbEntries.map(([key, entry]) => {
+                        const st = bbKeyState(key);
+                        return (
+                          <div key={key} className={`bb-server-row ${st ?? ""}`}>
+                            <span className={`bb-op-badge ${st ?? "idle"}`}>{st === "write" ? "W" : st === "read" ? "R" : ""}</span>
+                            <span className="bb-server-key">{key}</span>
+                            <span className="bb-server-val">{snip(entry.value)}</span>
+                            <span className={`bb-server-by ${entry.by}`}>{entry.by}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
-                {bbEntries.length === 0 ? (
-                  <div className="bb-node-empty">비어있음 — 이벤트 대기 중</div>
-                ) : (
-                  <div className="bb-node-rows">
-                    {bbEntries.map(([key, entry]) => {
-                      const st = bbKeyState(key);
-                      return (
-                        <div key={key} className={`bb-node-row ${st ?? ""}`}>
-                          {st === "write" && <span className="bb-op-badge write">W</span>}
-                          {st === "read"  && <span className="bb-op-badge read">R</span>}
-                          {!st && <span className="bb-op-badge idle" />}
-                          <span className="bb-node-key">{key}</span>
-                          <span className="bb-node-val">{snip(entry.value)}</span>
-                          <span className={`bb-node-by ${entry.by}`}>{entry.by}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
             </div>
           </>

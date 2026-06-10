@@ -128,8 +128,16 @@ function TasksTab() {
   const selectTask = useStore((s) => s.selectTask);
   const deleteTask = useStore((s) => s.deleteTask);
   const clearSpace = useStore((s) => s.clearSpace);
+  const replayTask = useStore((s) => s.replayTask);
+  const stopReplay = useStore((s) => s.stopReplay);
+  const isReplaying = useStore((s) => s.isReplaying);
+  const events = useStore((s) => s.events);
 
   const list = Object.values(tasks).sort((a, b) => b.lastTs - a.lastTs);
+
+  function isCompleted(taskId: string): boolean {
+    return events.some(e => e.kind === "task" && e.phase === "output" && e.taskId === taskId);
+  }
 
   return (
     <>
@@ -146,6 +154,8 @@ function TasksTab() {
         {list.length === 0 && <div className="empty">Task 없음 — 시뮬레이터를 실행하세요</div>}
         {list.map((t) => {
           const scenario = t.scenario;
+          const completed = isCompleted(t.taskId);
+          const isReplayingThis = isReplaying && selectedTask === t.taskId;
           return (
             <div
               key={t.taskId}
@@ -165,6 +175,19 @@ function TasksTab() {
                   <span title="notis">🔔{t.notis}</span>
                 </div>
                 <span className="task-age">{fmtAge(t.lastTs)}</span>
+                {completed && (
+                  isReplayingThis ? (
+                    <button
+                      className="task-replay-btn active"
+                      onClick={(ev) => { ev.stopPropagation(); stopReplay(); }}
+                    >⏹ 중지</button>
+                  ) : (
+                    <button
+                      className="task-replay-btn"
+                      onClick={(ev) => { ev.stopPropagation(); replayTask(t.taskId); }}
+                    >▶ 다시보기</button>
+                  )
+                )}
                 <button className="task-del" onClick={(ev) => { ev.stopPropagation(); deleteTask(t.taskId); }}>✕</button>
               </div>
             </div>
@@ -179,39 +202,36 @@ function TasksTab() {
 export function InfoPanel() {
   const activeTab = useStore((s) => s.activeTab);
   const setActiveTab = useStore((s) => s.setActiveTab);
-  const notiLog = useStore((s) => s.notiLog);
-  const blackboard = useStore((s) => s.blackboard);
   const events = useStore((s) => s.events);
   const selectedTask = useStore((s) => s.selectedTask);
 
-  const bbCount = Object.keys(blackboard).length;
-  const notiCount = notiLog.length;
   const evCount = selectedTask ? events.filter((e) => e.taskId === selectedTask).length : events.length;
+
+  const tabs = [
+    { key: "events" as const, label: "Events", count: evCount },
+    { key: "tasks"  as const, label: "Tasks",  count: undefined },
+  ];
+
+  const safeTab = (activeTab === "events" || activeTab === "tasks") ? activeTab : "events";
 
   return (
     <>
       <TaskBanner />
       <div className="info-tabs">
-        {(["blackboard", "notis", "events", "tasks"] as const).map((tab) => {
-          const count = tab === "blackboard" ? bbCount : tab === "notis" ? notiCount : tab === "events" ? evCount : undefined;
-          const label = tab === "blackboard" ? "Blackboard" : tab === "notis" ? "Noti" : tab === "events" ? "Events" : "Tasks";
-          return (
-            <button
-              key={tab}
-              className={`info-tab ${activeTab === tab ? "active" : ""}`}
-              onClick={() => setActiveTab(tab as never)}
-            >
-              {label}
-              {count !== undefined && count > 0 && <span className="info-tab-count">{count}</span>}
-            </button>
-          );
-        })}
+        {tabs.map(({ key, label, count }) => (
+          <button
+            key={key}
+            className={`info-tab ${safeTab === key ? "active" : ""}`}
+            onClick={() => setActiveTab(key)}
+          >
+            {label}
+            {count !== undefined && count > 0 && <span className="info-tab-count">{count}</span>}
+          </button>
+        ))}
       </div>
       <div className="info-content">
-        {activeTab === "blackboard" && <BlackboardTab />}
-        {activeTab === "notis"      && <NotiTab />}
-        {activeTab === "events"     && <EventFeed />}
-        {activeTab === "tasks"      && <TasksTab />}
+        {safeTab === "events" && <EventFeed />}
+        {safeTab === "tasks"  && <TasksTab />}
       </div>
     </>
   );

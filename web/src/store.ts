@@ -107,6 +107,8 @@ interface State {
   space: string;
   spaces: SpaceSummary[];
   activeTab: "blackboard" | "notis" | "events" | "tasks";
+  isReplaying: boolean;
+  _savedEvents: FlowEvent[] | null;
 
   subscribe: SubscribeFn;
   join: JoinFn;
@@ -126,6 +128,8 @@ interface State {
   deleteTask: (taskId: string) => void;
   clearSpace: () => void;
   deleteSpace: (space: string) => void;
+  replayTask: (taskId: string) => void;
+  stopReplay: () => void;
   ingest: (e: FlowEvent) => void;
   ingestMany: (es: FlowEvent[]) => void;
   loadSnapshot: (events: FlowEvent[]) => void;
@@ -184,11 +188,13 @@ export const useStore = create<State>((set) => ({
   edges: {},
   bbSeen: false,
   selectedTask: null,
+  isReplaying: false,
+  _savedEvents: null,
   tasks: {},
   tasksTotal: 0,
   space: "default",
   spaces: [],
-  activeTab: "blackboard",
+  activeTab: "events",
   subscribe: () => {},
   join: () => {},
   control: () => {},
@@ -231,6 +237,34 @@ export const useStore = create<State>((set) => ({
     s.control({ type: "deleteSpace", space });
     return { spaces: s.spaces.filter((x) => x.space !== space) };
   }),
+
+  replayTask: (taskId) => set((s) => {
+    const taskEvents = s.events.filter(e => e.taskId === taskId);
+    if (!taskEvents.length) return s;
+    const taskStart = Math.min(...taskEvents.map(e => e.ts));
+    const taskEnd   = Math.max(...taskEvents.map(e => e.ts));
+    const chronEvents = [...s.events]
+      .filter(e => {
+        if (e.taskId === taskId) return true;
+        if (e.kind === "agent" && e.ts >= taskStart - 10000 && e.ts <= taskEnd) return true;
+        return false;
+      })
+      .reverse(); // events are newest-first; reverse → chronological
+    return {
+      _savedEvents: s.events,
+      isReplaying: true,
+      ...emptyState(),
+      selectedTask: taskId,
+      replayQueue: chronEvents,
+    };
+  }),
+
+  stopReplay: () => set((s) => ({
+    isReplaying: false,
+    replayQueue: [],
+    events: s._savedEvents ?? s.events,
+    _savedEvents: null,
+  })),
 
   ingest: (e) => set((s) => s.replayQueue.length ? { replayQueue: [...s.replayQueue, e] } : applyEvent(s, e)),
   ingestMany: (es) => set((s) => es.reduce((acc, e) => applyEvent(acc, e), s)),
