@@ -1,12 +1,8 @@
+import { useState } from "react";
 import { useStore } from "../store";
-import { EventFeed } from "./EventFeed";
+import type { FlowEvent } from "../types";
 
-const AGENT_META: Record<string, { cls: string }> = {
-  hub: { cls: "hub" },
-  pc:  { cls: "pc" },
-  tv:  { cls: "tv" },
-};
-
+// ---- Helpers ----
 function fmtTime(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -19,130 +15,197 @@ function fmtAge(ts: number): string {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
 }
 
-// ---- Task I/O Banner ----
-function TaskBanner() {
-  const taskIO = useStore((s) => s.taskIO);
-  if (!taskIO) return null;
+function snip(v: unknown, max = 55): string {
+  if (v === undefined || v === null) return "";
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
 
-  const scenarioLabel = taskIO.scenario === "scenario-1" ? "S1" : taskIO.scenario === "scenario-2" ? "S2" : taskIO.scenario;
+function fmtResult(result: unknown): string {
+  if (!result) return "완료";
+  if (typeof result === "string") return result;
+  if (typeof result !== "object") return String(result);
+  const r = result as Record<string, unknown>;
+  if (typeof r.message === "string") return r.message;
+  const parts: string[] = [];
+  if (r.video || r.file) parts.push(`🎬 ${r.video ?? r.file}`);
+  if (r.duration) parts.push(`⏱ ${r.duration}`);
+  if (r.status) parts.push(String(r.status));
+  return parts.join(" · ") || snip(r, 60);
+}
+
+// ---- Event description ----
+type EvDesc = { direction?: string; text: string; detail?: unknown };
+
+function getEvDesc(e: FlowEvent): EvDesc {
+  switch (e.kind) {
+    case "task":
+      return {
+        text: e.phase === "input"
+          ? `"${snip(e.request, 55)}"`
+          : `완료 · ${fmtResult(e.result)}`,
+        detail: e.phase === "output" ? e.result : null,
+      };
+    case "delegate": {
+      const dir = `${e.from} → ${e.to}`;
+      return {
+        direction: dir,
+        text: e.phase === "dispatch"
+          ? (e.task ? `"${snip(e.task, 45)}"` : "작업 위임")
+          : "결과 반환",
+        detail: e.payload,
+      };
+    }
+    case "tool":
+      return {
+        direction: e.agentId,
+        text: e.phase === "start"
+          ? `${e.tool} 시작`
+          : `${e.tool} ${e.status === "error" ? "실패" : "완료"}${e.output ? " · " + snip(e.output, 35) : ""}`,
+        detail: e.phase === "end" ? { output: e.output, input: e.input } : e.input,
+      };
+    case "blackboard":
+      return {
+        direction: e.agentId,
+        text: e.op === "write"
+          ? `${e.key} = ${snip(e.value, 40)}`
+          : `${e.key} 읽기`,
+        detail: e.op === "write" ? e.value : null,
+      };
+    case "noti": {
+      const targets = Array.isArray(e.to) ? e.to.join(", ") : String(e.to);
+      return {
+        direction: `${e.from} → ${targets}`,
+        text: e.phase === "broadcast"
+          ? `${e.key ? e.key + " " : ""}알림 전송${e.message ? " · \"" + snip(e.message, 30) + "\"" : ""}`
+          : `알림 확인`,
+        detail: e.message || null,
+      };
+    }
+    case "message":
+      return {
+        direction: e.agentId,
+        text: e.title,
+        detail: e.content,
+      };
+    case "agent":
+      return {
+        text: `${e.agentId} ${e.phase === "start" ? "온라인" : "오프라인"}`,
+      };
+    default:
+      return { text: snip((e as Record<string, unknown>).kind, 30) };
+  }
+}
+
+// ---- Badge label per event kind ----
+function getBadgeInfo(e: FlowEvent): { label: string; cls: string } {
+  switch (e.kind) {
+    case "task":      return { label: e.phase === "input" ? "작업 시작" : "작업 완료", cls: "task" };
+    case "delegate":  return { label: e.phase === "dispatch" ? "위임" : "위임 반환", cls: "delegate" };
+    case "tool":      return {
+      label: e.phase === "start" ? "도구 시작" : (e.status === "error" ? "도구 실패" : "도구 완료"),
+      cls: e.phase === "end" && e.status === "error" ? "tool-err" : "tool"
+    };
+    case "blackboard":return { label: e.op === "write" ? "BB 쓰기" : "BB 읽기", cls: e.op === "write" ? "bb-write" : "bb-read" };
+    case "noti":      return { label: e.phase === "broadcast" ? "알림" : "알림 확인", cls: "noti" };
+    case "message":   return { label: "메시지", cls: "message" };
+    case "agent":     return { label: e.phase === "start" ? "온라인" : "오프라인", cls: "agent" };
+    default:          return { label: (e as any).kind, cls: "other" };
+  }
+}
+
+// ---- Single event row ----
+function EvRow({ event: e }: { event: FlowEvent }) {
+  const [open, setOpen] = useState(false);
+  const desc = getEvDesc(e);
+  const badge = getBadgeInfo(e);
+  const hasDetail = desc.detail != null;
 
   return (
-    <div className="task-io-banner">
-      {taskIO.request && (
-        <div className="task-io-input">
-          <div className="task-io-label">
-            Task Input
-            {scenarioLabel && <span className="scenario-badge">{scenarioLabel}</span>}
-          </div>
-          <div className="task-io-text">{taskIO.request}</div>
+    <div
+      className={`ev-row ${badge.cls}${hasDetail ? " clickable" : ""}${open ? " open" : ""}`}
+      onClick={() => hasDetail && setOpen((o) => !o)}
+    >
+      <div className="ev-row-main">
+        <span className="ev-time">{fmtTime(e.ts)}</span>
+        <span className={`ev-badge ${badge.cls}`}>{badge.label}</span>
+        <div className="ev-body">
+          {desc.direction && (
+            <span className="ev-direction">{desc.direction}</span>
+          )}
+          <span className="ev-text">{desc.text}</span>
         </div>
-      )}
-      {taskIO.result !== undefined && (
-        <div className="task-io-output">
-          <div className="task-io-label">Task Output</div>
-          <div className="task-io-result">
-            {typeof taskIO.result === "string"
-              ? taskIO.result
-              : JSON.stringify(taskIO.result, null, 0)}
-          </div>
-        </div>
+        {hasDetail && (
+          <span className="ev-expand-icon">{open ? "▾" : "▸"}</span>
+        )}
+      </div>
+      {open && hasDetail && (
+        <pre className="ev-detail">
+          {typeof desc.detail === "string"
+            ? desc.detail
+            : JSON.stringify(desc.detail, null, 2)}
+        </pre>
       )}
     </div>
   );
 }
 
-// ---- Blackboard Tab ----
-function BlackboardTab() {
-  const blackboard = useStore((s) => s.blackboard);
-  const entries = Object.entries(blackboard).sort((a, b) => b[1].ts - a[1].ts);
-
-  return (
-    <div className="bb-list">
-      {entries.length === 0 ? (
-        <div className="bb-empty">Blackboard 비어있음</div>
-      ) : (
-        entries.map(([key, entry]) => {
-          const val = entry.value === undefined ? "—" : typeof entry.value === "string" ? entry.value : JSON.stringify(entry.value);
-          return (
-            <div key={key} className="bb-row">
-              <span className="bb-key" title={key}>{key}</span>
-              <span className="bb-val" title={val}>{val}</span>
-              <div className="bb-meta">
-                <span className={`bb-by ${AGENT_META[entry.by]?.cls ?? ""}`}>{entry.by}</span>
-                <span className="bb-reads">{entry.reads > 0 ? `${entry.reads}r` : ""}</span>
-              </div>
-            </div>
-          );
-        })
-      )}
-    </div>
-  );
-}
-
-// ---- Notifications Tab ----
-function NotiTab() {
-  const notiLog = useStore((s) => s.notiLog);
+// ---- Event Timeline tab ----
+function EventTimeline() {
+  const events = useStore((s) => s.events);
   const selectedTask = useStore((s) => s.selectedTask);
 
   const filtered = selectedTask
-    ? notiLog.filter((n) => !n.taskId || n.taskId === selectedTask)
-    : notiLog;
+    ? events.filter((e) => !e.taskId || e.taskId === selectedTask)
+    : events;
+
+  if (filtered.length === 0) {
+    return (
+      <div className="ev-empty">
+        <div className="ev-empty-icon">📋</div>
+        <div>이벤트 없음</div>
+        <div className="ev-empty-sub">시뮬레이터가 실행되면 이벤트가 여기에 표시됩니다</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="noti-list">
-      {filtered.length === 0 ? (
-        <div className="noti-empty">알림 없음</div>
-      ) : (
-        filtered.map((n) => (
-          <div key={n.id} className={`noti-entry ${n.phase}`}>
-            <div className="noti-icon">{n.phase === "broadcast" ? "📢" : "✅"}</div>
-            <div className="noti-body">
-              <div className="noti-header">
-                <span className={`noti-phase ${n.phase}`}>{n.phase === "broadcast" ? "broadcast" : "ack"}</span>
-                <span className={`agent-chip ${AGENT_META[n.from]?.cls ?? "unknown"}`} style={{ fontSize: 10 }}>{n.from}</span>
-                <span style={{ fontSize: 11, color: "var(--muted)" }}>→</span>
-                {Array.isArray(n.to) ? (
-                  n.to.map((t) => (
-                    <span key={t} className={`agent-chip ${AGENT_META[t]?.cls ?? "unknown"}`} style={{ fontSize: 10 }}>{t}</span>
-                  ))
-                ) : (
-                  <span className={`agent-chip ${AGENT_META[n.to as string]?.cls ?? "unknown"}`} style={{ fontSize: 10 }}>{n.to}</span>
-                )}
-                {n.key && <span className="noti-key">{n.key}</span>}
-              </div>
-              {n.message && <div className="noti-msg">{n.message}</div>}
-              <div className="noti-time">{fmtTime(n.ts)}</div>
-            </div>
-          </div>
-        ))
-      )}
+    <div className="ev-timeline">
+      {filtered.map((e) => (
+        <EvRow key={e.eventId} event={e} />
+      ))}
     </div>
   );
 }
 
 // ---- Tasks Tab ----
 function TasksTab() {
-  const tasks = useStore((s) => s.tasks);
-  const tasksTotal = useStore((s) => s.tasksTotal);
+  const tasks        = useStore((s) => s.tasks);
+  const tasksTotal   = useStore((s) => s.tasksTotal);
   const selectedTask = useStore((s) => s.selectedTask);
-  const selectTask = useStore((s) => s.selectTask);
-  const deleteTask = useStore((s) => s.deleteTask);
-  const clearSpace = useStore((s) => s.clearSpace);
-  const replayTask = useStore((s) => s.replayTask);
-  const stopReplay = useStore((s) => s.stopReplay);
-  const isReplaying = useStore((s) => s.isReplaying);
-  const events = useStore((s) => s.events);
+  const selectTask   = useStore((s) => s.selectTask);
+  const deleteTask   = useStore((s) => s.deleteTask);
+  const clearSpace   = useStore((s) => s.clearSpace);
+  const replayTask   = useStore((s) => s.replayTask);
+  const stopReplay   = useStore((s) => s.stopReplay);
+  const isReplaying  = useStore((s) => s.isReplaying);
+  const events       = useStore((s) => s.events);
 
   const list = Object.values(tasks).sort((a, b) => b.lastTs - a.lastTs);
 
-  function isCompleted(taskId: string): boolean {
-    return events.some(e => e.kind === "task" && e.phase === "output" && e.taskId === taskId);
+  function isCompleted(taskId: string) {
+    return events.some((e) => e.kind === "task" && e.phase === "output" && e.taskId === taskId);
   }
+
+  const SCENARIO_LABELS: Record<string, string> = {
+    "scenario-1": "S1",
+    "scenario-2": "S2",
+  };
 
   return (
     <>
       <div className="task-list-head">
-        <span>{tasksTotal} tasks</span>
+        <span className="task-list-count">{tasksTotal}개 작업</span>
         <div className="task-list-actions">
           {selectedTask && (
             <button className="btn" onClick={() => selectTask(null)}>전체 보기</button>
@@ -151,30 +214,31 @@ function TasksTab() {
         </div>
       </div>
       <div className="task-list">
-        {list.length === 0 && <div className="empty">Task 없음 — 시뮬레이터를 실행하세요</div>}
+        {list.length === 0 && (
+          <div className="task-empty">작업 없음 — 시뮬레이터를 실행하세요</div>
+        )}
         {list.map((t) => {
-          const scenario = t.scenario;
           const completed = isCompleted(t.taskId);
           const isReplayingThis = isReplaying && selectedTask === t.taskId;
+          const scenLabel = t.scenario ? (SCENARIO_LABELS[t.scenario] ?? t.scenario) : null;
           return (
             <div
               key={t.taskId}
-              className={`task-row ${selectedTask === t.taskId ? "sel" : ""}`}
+              className={`task-row${selectedTask === t.taskId ? " sel" : ""}`}
               onClick={() => selectTask(t.taskId)}
             >
-              <div className="task-id">{t.taskId}</div>
-              <div className="task-meta">
-                {scenario && (
-                  <span className={`task-scenario ${scenario}`}>
-                    {scenario === "scenario-1" ? "S1" : scenario === "scenario-2" ? "S2" : scenario}
-                  </span>
+              <div className="task-row-top">
+                <span className="task-id">{t.taskId}</span>
+                {scenLabel && (
+                  <span className={`task-scen ${t.scenario}`}>{scenLabel}</span>
                 )}
-                <div className="task-counts">
-                  <span title="delegates">↔{t.delegates}</span>
-                  <span title="tools">⚙{t.tools}</span>
-                  <span title="notis">🔔{t.notis}</span>
-                </div>
                 <span className="task-age">{fmtAge(t.lastTs)}</span>
+              </div>
+              <div className="task-row-meta">
+                <span className="task-stat" title="위임">↔ {t.delegates}</span>
+                <span className="task-stat" title="도구">⚙ {t.tools}</span>
+                <span className="task-stat" title="알림">📢 {t.notis}</span>
+                <div style={{ flex: 1 }} />
                 {completed && (
                   isReplayingThis ? (
                     <button
@@ -188,7 +252,10 @@ function TasksTab() {
                     >▶ 다시보기</button>
                   )
                 )}
-                <button className="task-del" onClick={(ev) => { ev.stopPropagation(); deleteTask(t.taskId); }}>✕</button>
+                <button
+                  className="task-del"
+                  onClick={(ev) => { ev.stopPropagation(); deleteTask(t.taskId); }}
+                >✕</button>
               </div>
             </div>
           );
@@ -204,33 +271,52 @@ export function InfoPanel() {
   const setActiveTab = useStore((s) => s.setActiveTab);
   const events = useStore((s) => s.events);
   const selectedTask = useStore((s) => s.selectedTask);
+  const taskIO = useStore((s) => s.taskIO);
 
-  const evCount = selectedTask ? events.filter((e) => e.taskId === selectedTask).length : events.length;
-
-  const tabs = [
-    { key: "events" as const, label: "Events", count: evCount },
-    { key: "tasks"  as const, label: "Tasks",  count: undefined },
-  ];
+  const evCount = selectedTask
+    ? events.filter((e) => !e.taskId || e.taskId === selectedTask).length
+    : events.length;
 
   const safeTab = (activeTab === "events" || activeTab === "tasks") ? activeTab : "events";
 
+  const scenLabels: Record<string, string> = {
+    "scenario-1": "S1: 도구 기반",
+    "scenario-2": "S2: 블랙보드+병렬",
+  };
+
   return (
     <>
-      <TaskBanner />
-      <div className="info-tabs">
-        {tabs.map(({ key, label, count }) => (
-          <button
-            key={key}
-            className={`info-tab ${safeTab === key ? "active" : ""}`}
-            onClick={() => setActiveTab(key)}
-          >
-            {label}
-            {count !== undefined && count > 0 && <span className="info-tab-count">{count}</span>}
-          </button>
-        ))}
+      {/* Mini task banner */}
+      {taskIO && (
+        <div className="side-task-banner">
+          {taskIO.scenario && (
+            <span className={`side-scen-badge ${taskIO.scenario}`}>
+              {scenLabels[taskIO.scenario] ?? taskIO.scenario}
+            </span>
+          )}
+          <span className="side-task-text">{taskIO.result != null ? "✅ 완료" : "⏳ 처리 중"}</span>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="side-tabs">
+        <button
+          className={`side-tab${safeTab === "events" ? " active" : ""}`}
+          onClick={() => setActiveTab("events")}
+        >
+          이벤트 흐름
+          {evCount > 0 && <span className="side-tab-count">{evCount}</span>}
+        </button>
+        <button
+          className={`side-tab${safeTab === "tasks" ? " active" : ""}`}
+          onClick={() => setActiveTab("tasks")}
+        >
+          작업 목록
+        </button>
       </div>
-      <div className="info-content">
-        {safeTab === "events" && <EventFeed />}
+
+      <div className="side-content">
+        {safeTab === "events" && <EventTimeline />}
         {safeTab === "tasks"  && <TasksTab />}
       </div>
     </>

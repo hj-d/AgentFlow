@@ -18,7 +18,6 @@ export default function App() {
 
   useEffect(() => connect(), []);
 
-  // Replay interval — slower during replay mode so steps are visible
   useEffect(() => {
     const interval = isReplaying ? 700 : REPLAY_INTERVAL_MS;
     const id = setInterval(() => {
@@ -32,9 +31,8 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-icon">🏠</span>
+          <span className="brand-icon">🔗</span>
           <span className="brand-name">AgentFlow</span>
-          <span className="brand-sub">Home Network</span>
         </div>
         <SpaceSwitcher />
         <div className="topbar-right">
@@ -65,26 +63,19 @@ export default function App() {
       <main className="three-col">
         <section className="panel delegate-panel">
           <div className="panel-header">
-            <span className="panel-title">Agent 대화</span>
-            <span className="panel-hint">실시간 대화 흐름</span>
+            <span className="panel-title">💬 Agent 대화</span>
+            <span className="panel-hint">실시간 실행 흐름</span>
           </div>
           <DelegateLog />
         </section>
 
         <section className="panel topology-panel">
-          <div className="panel-header">
-            <span className="panel-title">Network</span>
-            {currentTask
-              ? <span className="panel-hint task-tag">{currentTask}</span>
-              : <span className="panel-hint">task를 선택하면 해당 흐름만 표시</span>
-            }
-          </div>
           <DeviceTopology />
         </section>
 
-        <section className="panel info-panel">
+        <aside className="panel info-panel">
           <InfoPanel />
-        </section>
+        </aside>
       </main>
     </div>
   );

@@ -1,402 +1,232 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import {
   useStore, ACTIVITY_TTL_MS, EDGE_TTL_MS, THINKING_TTL_MS,
-  type PulseFlow, type EdgeState, type TaskIO,
+  type EdgeState,
 } from "../store";
 import type { FlowEvent } from "../types";
 
-interface CardPos { x: number; y: number; w: number; h: number; cx: number; cy: number }
-
-const AGENTS: { id: string; name: string; role: string; cls: "pc" | "hub" | "tv" }[] = [
-  { id: "pc",  name: "PC Agent", role: "Creator",      cls: "pc" },
-  { id: "hub", name: "HomeHub",  role: "Orchestrator", cls: "hub" },
-  { id: "tv",  name: "TV Agent", role: "Display",      cls: "tv" },
+// ─── Agent spec ─────────────────────────────────────────────────
+const AGENTS = [
+  { id: "pc",  icon: "💻", name: "PC",  role: "Creator",      cls: "pc"  as const },
+  { id: "hub", icon: "🏠", name: "Hub", role: "Orchestrator", cls: "hub" as const },
+  { id: "tv",  icon: "📺", name: "TV",  role: "Display",      cls: "tv"  as const },
 ];
 
-const PULSE_DUR = 1000;
-
-// ---- Format helpers ----
-function fmtTaskResult(result: unknown): string {
-  if (!result) return "완료";
-  if (typeof result === "string") return result;
-  if (typeof result !== "object") return String(result);
-  const r = result as Record<string, unknown>;
-  if (typeof r.message === "string") return r.message;
-  const parts: string[] = [];
-  if (r.video || r.file) parts.push(`🎬 ${r.video ?? r.file}`);
-  if (r.duration) parts.push(`⏱ ${r.duration}`);
-  return parts.join("  ·  ") || JSON.stringify(r).slice(0, 80);
-}
-
-// ---- Task I/O — horizontal directional layout ----
-function TaskIOSection({ taskIO }: { taskIO: TaskIO | null }) {
-  if (!taskIO?.request) return null;
-  const scenLabel = taskIO.scenario === "scenario-1" ? "S1"
-    : taskIO.scenario === "scenario-2" ? "S2"
-    : (taskIO.scenario ?? null);
-  const hasResult = taskIO.result != null;
-
-  return (
-    <div className="tio-section">
-      <div className={`tio-request ${hasResult ? "has-result" : ""}`}>
-        <div className="tio-header in">
-          <span className="tio-dir">📥</span>
-          <span className="tio-lbl">User Request</span>
-          {scenLabel && <span className="tio-scen">{scenLabel}</span>}
-          <span className="tio-arrow-badge">→</span>
-        </div>
-        <div className="tio-text">{taskIO.request}</div>
-      </div>
-
-      {hasResult ? (
-        <div className="tio-response">
-          <div className="tio-header out">
-            <span className="tio-arrow-badge">←</span>
-            <span className="tio-lbl">Hub Response</span>
-            <span className="tio-done">✅</span>
-            <span className="tio-dir">📤</span>
-          </div>
-          <div className="tio-text">{fmtTaskResult(taskIO.result)}</div>
-        </div>
-      ) : (
-        <div className="tio-processing">
-          <div className="tio-processing-dots">
-            <span /><span /><span />
-          </div>
-          <div className="tio-processing-label">Hub 처리 중...</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---- Thinking dots ----
-function ThinkDots({ cls = "" }: { cls?: string }) {
-  return (
-    <div className={`think-dots ${cls}`}>
-      <span className="td" /><span className="td" /><span className="td" />
-    </div>
-  );
-}
-
-// ---- PC Monitor ----
-function PCIllus({ thinking, busy, toolName }: { thinking: boolean; busy: boolean; toolName?: string }) {
-  return (
-    <div className="dev-illus pc-illus">
-      <div className={`pc-monitor ${busy ? "busy" : ""}`}>
-        <div className="pc-screen">
-          {thinking
-            ? <ThinkDots cls="pc" />
-            : busy && toolName
-              ? <div className="screen-running"><span className="s-spin">⚙</span><span className="s-name">{toolName}</span></div>
-              : <div className="screen-idle"><span /><span /><span /></div>
-          }
-        </div>
-      </div>
-      <div className="pc-neck" />
-      <div className="pc-base" />
-    </div>
-  );
-}
-
-// ---- Hub Router ----
-function HubIllus({ thinking, busy, toolName }: { thinking: boolean; busy: boolean; toolName?: string }) {
-  const s = thinking ? "think" : busy ? "busy" : "on";
-  return (
-    <div className="dev-illus hub-illus">
-      {thinking && <div className="hub-think-bubble"><ThinkDots cls="hub" /></div>}
-      <div className="hub-ants">
-        <span className="ant s" /><span className="ant t" /><span className="ant s" />
-      </div>
-      <div className={`hub-chassis ${busy ? "busy" : ""}`}>
-        <span className={`hled l1 ${s}`} />
-        <span className={`hled l2 ${s}`} />
-        <span className={`hled l3 ${s}`} />
-      </div>
-      {busy && !thinking && toolName && (
-        <div className="hub-tool-tag"><span className="s-spin">⚙</span> {toolName}</div>
-      )}
-    </div>
-  );
-}
-
-// ---- TV ----
-function TVIllus({ online, thinking, busy, toolName }: { online: boolean; thinking: boolean; busy: boolean; toolName?: string }) {
-  return (
-    <div className="dev-illus tv-illus">
-      <div className={`tv-bezel ${busy ? "busy" : ""}`}>
-        <div className="tv-screen">
-          {thinking
-            ? <ThinkDots cls="tv" />
-            : busy && toolName
-              ? <div className="screen-running tv"><span className="s-spin">⚙</span><span className="s-name">{toolName}</span></div>
-              : <div className="tv-idle"><span /><span className="w" /></div>
-          }
-        </div>
-        <div className="tv-led-bar">
-          <span className={`tv-pwr ${online ? "on" : "off"}`} />
-        </div>
-      </div>
-      <div className="tv-legs"><span className="tvleg" /><span className="tvleg" /></div>
-    </div>
-  );
-}
-
-// ---- Activity card system ----
-type ActItem = {
-  key: string;
-  kind: "tool" | "dispatch" | "return" | "bb-w" | "bb-r" | "msg";
-  icon: string;
-  typeLabel: string;
-  text: string;
-  cls: string;
-  detail: unknown;
+// ─── Colors ─────────────────────────────────────────────────────
+const FLOW_COLOR: Record<string, string> = {
+  delegate:   "#6366f1",
+  noti:       "#0ea5e9",
+  "bb-write": "#f59e0b",
+  "bb-read":  "#10b981",
+};
+const FLOW_BG: Record<string, string> = {
+  delegate:   "#eef2ff",
+  noti:       "#f0f9ff",
+  "bb-write": "#fffbeb",
+  "bb-read":  "#f0fdf4",
 };
 
-function buildActivity(events: FlowEvent[], agentId: string, taskId: string | undefined): ActItem[] {
-  const items: ActItem[] = [];
-  for (const e of events) {
-    if (items.length >= 4) break;
-    if (taskId && e.taskId && e.taskId !== taskId) continue;
-
-    if (e.kind === "delegate") {
-      if (e.from === agentId) {
-        if (e.phase === "dispatch") {
-          const taskSnip = e.task ? `"${e.task.slice(0, 18)}${e.task.length > 18 ? "…" : ""}"` : `→ ${e.to}`;
-          items.push({ key: e.eventId, kind: "dispatch", icon: "→", typeLabel: `→ ${e.to}`, text: taskSnip, cls: "dispatch", detail: { task: e.task, to: e.to } });
-        } else if (e.phase === "return") {
-          items.push({ key: e.eventId, kind: "return", icon: "↩", typeLabel: `↩ ${e.to}`, text: "작업 완료 반환", cls: "return", detail: e.payload });
-        }
-      }
-      continue;
-    }
-    if (e.agentId !== agentId) continue;
-
-    if (e.kind === "tool" && e.phase === "end") {
-      items.push({
-        key: e.eventId,
-        kind: "tool",
-        icon: e.status === "error" ? "✗" : "✓",
-        typeLabel: "도구 실행",
-        text: e.tool,
-        cls: e.status === "error" ? "err" : "ok",
-        detail: e.output,
-      });
-    } else if (e.kind === "blackboard" && e.op === "write") {
-      items.push({ key: e.eventId, kind: "bb-w", icon: "✍", typeLabel: "BB 쓰기", text: e.key, cls: "bb-w", detail: e.value });
-    } else if (e.kind === "blackboard" && e.op === "read") {
-      items.push({ key: e.eventId, kind: "bb-r", icon: "📖", typeLabel: "BB 읽기", text: e.key, cls: "bb-r", detail: null });
-    }
-  }
-  return items;
+// ─── Helpers ────────────────────────────────────────────────────
+function snip(v: unknown, max = 22): string {
+  if (v == null) return "";
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
-function ActCard({ item }: { item: ActItem }) {
-  const [open, setOpen] = useState(false);
+// ─── Activity items ─────────────────────────────────────────────
+interface ActivityItem {
+  id: string;
+  ts: number;
+  type: "tool" | "delegate" | "bb" | "noti";
+  icon: string;
+  brief: string;
+  detail?: unknown;
+}
+
+function getAgentActivities(
+  events: FlowEvent[], agentId: string, taskId?: string,
+): ActivityItem[] {
+  const items: ActivityItem[] = [];
+
+  for (const e of events) {
+    if (taskId && e.taskId && e.taskId !== taskId) continue;
+
+    if (e.kind === "tool" && e.agentId === agentId && e.phase === "end") {
+      items.push({
+        id: e.eventId,
+        ts: e.ts,
+        type: "tool",
+        icon: e.status === "error" ? "✗" : "⚙",
+        brief: `${e.tool}${e.output != null ? " → " + snip(e.output, 22) : ""}`,
+        detail: { tool: e.tool, input: e.input, output: e.output, status: e.status },
+      });
+    } else if (e.kind === "delegate" && e.from === agentId && e.phase === "dispatch") {
+      items.push({
+        id: e.eventId,
+        ts: e.ts,
+        type: "delegate",
+        icon: "→",
+        brief: `${e.to}: ${snip(e.task, 22) || "위임"}`,
+        detail: e.payload,
+      });
+    } else if (e.kind === "delegate" && e.to === agentId && e.phase === "return") {
+      items.push({
+        id: e.eventId,
+        ts: e.ts,
+        type: "delegate",
+        icon: "↩",
+        brief: `${e.from} 완료`,
+        detail: e.payload,
+      });
+    } else if (e.kind === "blackboard" && e.agentId === agentId) {
+      items.push({
+        id: e.eventId,
+        ts: e.ts,
+        type: "bb",
+        icon: e.op === "write" ? "✍" : "📖",
+        brief: `${e.key}${e.op === "write" ? ": " + snip(e.value, 18) : ""}`,
+        detail: e.op === "write" ? e.value : null,
+      });
+    } else if (e.kind === "noti" && e.agentId === agentId) {
+      const targets = Array.isArray(e.to) ? e.to.join(", ") : String(e.to ?? "");
+      items.push({
+        id: e.eventId,
+        ts: e.ts,
+        type: "noti",
+        icon: e.phase === "broadcast" ? "📢" : "✓",
+        brief: e.phase === "broadcast"
+          ? `${targets}${e.key ? " · " + e.key : ""}`
+          : `확인`,
+        detail: e.message ?? null,
+      });
+    }
+  }
+
+  return items.sort((a, b) => b.ts - a.ts).slice(0, 8);
+}
+
+// ─── ThinkDots ──────────────────────────────────────────────────
+function ThinkDots({ size = "sm" }: { size?: "sm" | "xs" }) {
   return (
-    <div
-      className={`act-card ${item.cls}${item.detail != null ? " clickable" : ""}`}
-      onClick={() => item.detail != null && setOpen((o) => !o)}
-    >
-      <div className="act-card-row">
-        <span className="act-card-type">{item.typeLabel}</span>
-        <span className={`act-card-icon ${item.cls}`}>{item.icon}</span>
-      </div>
-      <div className="act-card-text">{item.text.length > 22 ? item.text.slice(0, 21) + "…" : item.text}</div>
-      {open && item.detail != null && (
-        <pre className="act-card-detail">{JSON.stringify(item.detail, null, 2)}</pre>
-      )}
+    <span className={`think-dots think-${size}`}>
+      <span /><span /><span />
+    </span>
+  );
+}
+
+// ─── ActivityStack ──────────────────────────────────────────────
+function ActivityStack({ items }: { items: ActivityItem[] }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="act-stack">
+      {items.map((item) => {
+        const isOpen = openId === item.id;
+        const hasDetail = item.detail != null;
+        return (
+          <div
+            key={item.id}
+            className={`act-item act-${item.type}${isOpen ? " open" : ""}${hasDetail ? " clickable" : ""}`}
+            onClick={() => hasDetail && setOpenId(isOpen ? null : item.id)}
+          >
+            <div className="act-item-row">
+              <span className="act-icon">{item.icon}</span>
+              <span className="act-brief">{item.brief}</span>
+              {hasDetail && (
+                <span className="act-caret">{isOpen ? "▾" : "▸"}</span>
+              )}
+            </div>
+            {isOpen && hasDetail && (
+              <pre className="act-detail">
+                {typeof item.detail === "string"
+                  ? item.detail
+                  : JSON.stringify(item.detail, null, 2)}
+              </pre>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-// ============================================================
-export function DeviceTopology() {
-  const agents     = useStore((s) => s.agents);
-  const pulses     = useStore((s) => s.pulses);
-  const edges      = useStore((s) => s.edges);
-  const blackboard = useStore((s) => s.blackboard);
-  const events     = useStore((s) => s.events);
-  const taskIO     = useStore((s) => s.taskIO);
-  const expirePulses   = useStore((s) => s.expirePulses);
-  const expireEdges    = useStore((s) => s.expireEdges);
-  const expireActivity = useStore((s) => s.expireActivity);
-  const [, tick] = useState(0);
+// ─── UserNode ───────────────────────────────────────────────────
+function UserNode({ request, done }: { request: string; done: boolean }) {
+  return (
+    <div className={`user-node${done ? " done" : ""}`}>
+      <div className="user-node-left">
+        <div className="user-node-avatar">👤</div>
+        <div className="user-node-connector" />
+      </div>
+      <div className="user-node-body">
+        <span className="user-node-label">사용자 요청</span>
+        <span className="user-node-req">{request}</span>
+        {done && <span className="user-node-done">✅ 완료</span>}
+      </div>
+    </div>
+  );
+}
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const bbRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<Record<string, CardPos>>({});
-  const [bbPos, setBbPos] = useState<CardPos | null>(null);
+// ─── AgentCard ──────────────────────────────────────────────────
+interface AgentCardProps {
+  spec: typeof AGENTS[number];
+  online: boolean;
+  thinking: boolean;
+  busy: boolean;
+  toolName?: string;
+}
 
-  const taskId = taskIO?.taskId;
+function AgentCard({ spec, online, thinking, busy, toolName }: AgentCardProps) {
+  let statusText = "대기 중";
+  let statusCls = "idle";
+  if (!online)           { statusText = "오프라인";          statusCls = "offline"; }
+  else if (busy && toolName) { statusText = toolName;        statusCls = "busy"; }
+  else if (busy)         { statusText = "작업 중";           statusCls = "busy"; }
+  else if (thinking)     { statusText = "추론 중…";          statusCls = "thinking"; }
 
-  // RAF loop
-  const rafRef = useRef<number>(0);
-  useEffect(() => {
-    const loop = () => {
-      expirePulses(performance.now());
-      expireEdges(Date.now());
-      expireActivity(Date.now());
-      tick((n) => (n + 1) % 1_000_000);
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [expirePulses, expireEdges, expireActivity]);
+  const isHub = spec.id === "hub";
 
-  // Measure card positions
-  useEffect(() => {
-    const measure = () => {
-      const cr = containerRef.current?.getBoundingClientRect();
-      if (!cr) return;
-      const next: Record<string, CardPos> = {};
-      for (const a of AGENTS) {
-        const el = cardRefs.current[a.id];
-        if (!el) continue;
-        const r = el.getBoundingClientRect();
-        const x = r.left - cr.left, y = r.top - cr.top;
-        next[a.id] = { x, y, w: r.width, h: r.height, cx: x + r.width / 2, cy: y + r.height / 2 };
-      }
-      setPos(next);
-      const bbEl = bbRef.current;
-      if (bbEl) {
-        const r = bbEl.getBoundingClientRect();
-        const x = r.left - cr.left, y = r.top - cr.top;
-        setBbPos({ x, y, w: r.width, h: r.height, cx: x + r.width / 2, cy: y + r.height / 2 });
-      }
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (containerRef.current) ro.observe(containerRef.current);
-    return () => ro.disconnect();
-  }, []);
+  return (
+    <div className={`ag-card ${spec.cls} ${statusCls}`}>
+      <div className="ag-card-top">
+        <div className="ag-icon-wrap">
+          <span className="ag-icon">{spec.icon}</span>
+          <span className={`ag-dot ${statusCls}`} />
+        </div>
+        <div className="ag-info">
+          <div className="ag-name-row">
+            <span className="ag-name">{spec.name}</span>
+            {isHub
+              ? <span className="ag-orch">Orchestrator</span>
+              : <span className={`ag-role ${spec.cls}`}>{spec.role}</span>}
+          </div>
+          <div className={`ag-status ${statusCls}`}>
+            {statusCls === "busy"     && <span className="ag-spin">⚙</span>}
+            {statusCls === "thinking" && <ThinkDots size="xs" />}
+            <span className="ag-status-text">{statusText}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-  const now  = performance.now();
+// ─── BBNode ─────────────────────────────────────────────────────
+function BBNode({
+  blackboard, edgeList,
+}: {
+  blackboard: Record<string, { value: unknown; by: string; ts: number; reads: number }>;
+  edgeList: EdgeState[];
+}) {
+  const entries = Object.entries(blackboard).sort((a, b) => b[1].ts - a[1].ts);
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const wall = Date.now();
-  const edgeList = useMemo(() => Object.values(edges), [edges]);
 
-  function bestEdge(f: string, t: string): EdgeState | null {
-    let best: EdgeState | null = null;
+  function getOp(key: string): "write" | "read" | null {
     for (const e of edgeList) {
-      const m = (e.from === f && e.to === t) || (e.from === t && e.to === f);
-      if (m && wall - e.ts < EDGE_TTL_MS && (!best || e.ts > best.ts)) best = e;
-    }
-    return best;
-  }
-  function bestBBEdge(agentId: string): EdgeState | null {
-    let best: EdgeState | null = null;
-    for (const e of edgeList) {
-      const m = (e.from === agentId && e.to === "__blackboard__") ||
-                (e.from === "__blackboard__" && e.to === agentId);
-      if (m && wall - e.ts < EDGE_TTL_MS && (!best || e.ts > best.ts)) best = e;
-    }
-    return best;
-  }
-  function fresh(e: EdgeState) { return Math.max(0, 1 - (wall - e.ts) / EDGE_TTL_MS); }
-
-  // ---- SVG lines ----
-  function hLine(f: string, t: string) {
-    const a = pos[f], b = pos[t];
-    if (!a || !b) return null;
-    const edge = bestEdge(f, t);
-    const cls = edge?.flow ?? ("idle" as PulseFlow | "idle");
-    const x1 = a.x + a.w, y1 = a.cy, x2 = b.x, y2 = b.cy, mx = (x1 + x2) / 2;
-    return (
-      <path key={`${f}→${t}`}
-        d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
-        className={`topo-edge ${cls}`}
-        style={{ opacity: edge ? 0.25 + fresh(edge) * 0.65 : 0.3 }} />
-    );
-  }
-
-  function bbLine(agentId: string) {
-    const a = pos[agentId];
-    if (!a || !bbPos) return null;
-    const edge = bestBBEdge(agentId);
-    const cls = edge?.flow ?? ("idle" as PulseFlow | "idle");
-    const x1 = a.cx, y1 = a.y + a.h;
-    let x2 = bbPos.cx;
-    if (agentId === "pc")  x2 = bbPos.x + bbPos.w * 0.18;
-    if (agentId === "tv")  x2 = bbPos.x + bbPos.w * 0.82;
-    const y2 = bbPos.y;
-    const ym = y1 + (y2 - y1) * 0.45;
-    const dashArr = edge ? "none" : "6 4";
-    return (
-      <path key={`${agentId}→bb`}
-        d={`M${x1},${y1} C${x1},${ym} ${x2},${ym} ${x2},${y2}`}
-        className={`topo-edge ${cls} bb-cable`}
-        style={{ opacity: edge ? 0.35 + fresh(edge) * 0.55 : 0.18, strokeDasharray: dashArr }} />
-    );
-  }
-
-  // ---- Bezier ----
-  function bz(x1: number, y1: number, cx1: number, cy1: number, cx2: number, cy2: number,
-               x2: number, y2: number, t: number): [number, number] {
-    const u = 1 - t;
-    return [
-      u*u*u*x1 + 3*u*u*t*cx1 + 3*u*t*t*cx2 + t*t*t*x2,
-      u*u*u*y1 + 3*u*u*t*cy1 + 3*u*t*t*cy2 + t*t*t*y2,
-    ];
-  }
-
-  function pulseXY(from: string, to: string, t: number): [number, number] | null {
-    const getP = (id: string): CardPos | null => id === "__blackboard__" ? bbPos : (pos[id] ?? null);
-    const a = getP(from), b = getP(to);
-    if (!a || !b) return null;
-
-    if (from === "__blackboard__" || to === "__blackboard__") {
-      const isWrite = to === "__blackboard__";
-      const agPos = isWrite ? a : b;
-      const bbP   = isWrite ? b : a;
-      const agId  = isWrite ? from : to;
-      let bbX = bbP.cx;
-      if (agId === "pc") bbX = bbP.x + bbP.w * 0.18;
-      if (agId === "tv") bbX = bbP.x + bbP.w * 0.82;
-      const [x1, y1] = isWrite ? [agPos.cx, agPos.y + agPos.h] : [bbX, bbP.y];
-      const [x2, y2] = isWrite ? [bbX, bbP.y] : [agPos.cx, agPos.y + agPos.h];
-      const ym = y1 + (y2 - y1) * 0.45;
-      return bz(x1, y1, x1, ym, x2, ym, x2, y2, t);
-    }
-    const x1 = a.x + a.w, y1 = a.cy, x2 = b.x, y2 = b.cy, mx = (x1 + x2) / 2;
-    return bz(x1, y1, mx, y1, mx, y2, x2, y2, t);
-  }
-
-  function renderPulses() {
-    return pulses.map((p) => {
-      const t = Math.min(1, (now - p.start) / PULSE_DUR);
-      const xy = pulseXY(p.from, p.to, t);
-      if (!xy) return null;
-      const [px, py] = xy;
-      const alpha = 1 - t * 0.45;
-      const showLabel = !!p.label && t > 0.1 && t < 0.9;
-      const lw = p.label ? Math.min(p.label.length * 6.5, 96) + 12 : 0;
-      return (
-        <g key={p.id}>
-          <circle cx={px} cy={py} r={5} className={`topo-pulse ${p.flow}`} style={{ opacity: alpha }} />
-          {showLabel && (
-            <>
-              <rect x={px + 8} y={py - 10} width={lw} height={17} rx="4"
-                className="plabel-bg" style={{ opacity: alpha }} />
-              <text x={px + 13} y={py + 3}
-                className={`plabel-txt ${p.flow}`} style={{ opacity: alpha }}>
-                {p.label!.length > 14 ? p.label!.slice(0, 13) + "…" : p.label}
-              </text>
-            </>
-          )}
-        </g>
-      );
-    });
-  }
-
-  // ---- Blackboard entries ----
-  const bbEntries = useMemo(() =>
-    Object.entries(blackboard).sort((a, b) => b[1].ts - a[1].ts).slice(0, 5),
-    [blackboard]);
-
-  function bbKeyState(key: string): "write" | "read" | null {
-    for (const e of edgeList) {
-      if (e.label === key && wall - e.ts < 2000) {
+      if (e.label === key && wall - e.ts < 2500) {
         if (e.flow === "bb-write") return "write";
         if (e.flow === "bb-read")  return "read";
       }
@@ -404,240 +234,380 @@ export function DeviceTopology() {
     return null;
   }
 
-  function snip(v: unknown): string {
-    if (v === undefined || v === null) return "—";
-    const s = typeof v === "string" ? v : JSON.stringify(v);
-    return s.length > 26 ? s.slice(0, 25) + "…" : s;
-  }
-
-  const bbActive = edgeList.some(e =>
-    (e.to === "__blackboard__" || e.from === "__blackboard__") && wall - e.ts < 2000
-  );
-
-  const containerH = containerRef.current?.offsetHeight ?? 540;
-  const hasAnyAgent = AGENTS.some((a) => !!agents[a.id]);
-
-  // Per-agent activity items
-  const actItems = useMemo(() => ({
-    pc:  buildActivity(events, "pc",  taskId),
-    hub: buildActivity(events, "hub", taskId),
-    tv:  buildActivity(events, "tv",  taskId),
-  }), [events, taskId]);
+  if (entries.length === 0) return null;
 
   return (
-    <div className="topology-scroll">
-      <div className="topology-container" ref={containerRef}>
-        {/* SVG overlay */}
-        <svg className="topology-svg" width="100%" height={containerH}
-          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", overflow: "visible" }}>
-          {hLine("pc", "hub")}
-          {hLine("hub", "tv")}
-          {bbLine("pc")}
-          {bbLine("hub")}
-          {bbLine("tv")}
-          {renderPulses()}
+    <div className="bb-node">
+      <div className="bb-node-head">
+        <span className="bb-node-icon">🗄️</span>
+        <span className="bb-node-title">Blackboard</span>
+        <span className="bb-node-count">{entries.length}개 키</span>
+      </div>
+      <div className="bb-node-rows">
+        {entries.map(([key, entry]) => {
+          const op = getOp(key);
+          const isOpen = openKey === key;
+          return (
+            <div
+              key={key}
+              className={`bb-node-row ${op ?? ""}${isOpen ? " open" : ""}`}
+              onClick={() => setOpenKey(isOpen ? null : key)}
+            >
+              <span className={`bb-node-op ${op ?? "idle"}`}>
+                {op === "write" ? "W" : op === "read" ? "R" : "·"}
+              </span>
+              <span className="bb-node-key">{key}</span>
+              <span className="bb-node-val">{snip(entry.value, 28)}</span>
+              <span className={`bb-node-by bb-by-${entry.by}`}>{entry.by}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── SVG Line + Label ────────────────────────────────────────────
+interface Pt { x: number; y: number }
+interface CardPos { x: number; y: number; w: number; h: number }
+
+function cardPt(p: CardPos, side: "top" | "bottom" | "left" | "right" | "center"): Pt {
+  const cx = p.x + p.w / 2;
+  const cy = p.y + p.h / 2;
+  switch (side) {
+    case "top":    return { x: cx, y: p.y };
+    case "bottom": return { x: cx, y: p.y + p.h };
+    case "left":   return { x: p.x, y: cy };
+    case "right":  return { x: p.x + p.w, y: cy };
+    case "center": return { x: cx, y: cy };
+  }
+}
+
+function edgeLabelText(edge: EdgeState): string {
+  const label = snip(edge.label, 20);
+  switch (edge.flow) {
+    case "delegate": return edge.from === "hub" ? `→ ${label || "위임"}` : `↩ ${label || "반환"}`;
+    case "noti":     return `📢 ${label || "알림"}`;
+    case "bb-write": return `✍ ${label}`;
+    case "bb-read":  return `📖 ${label}`;
+    default:         return label;
+  }
+}
+
+function SvgEdge({
+  from, to, edge, wall, alwaysShow,
+}: {
+  from: Pt; to: Pt;
+  edge: EdgeState | null; wall: number;
+  alwaysShow?: boolean;
+}) {
+  const age   = edge ? wall - edge.ts : EDGE_TTL_MS + 1;
+  const active = age < EDGE_TTL_MS;
+  const fresh  = active ? Math.max(0, 1 - age / EDGE_TTL_MS) : 0;
+
+  if (!alwaysShow && !active) return null;
+
+  const color    = active ? (FLOW_COLOR[edge!.flow] ?? "#6366f1") : "#94a3b8";
+  const lineOp   = active ? 0.55 + fresh * 0.45 : 0.28;
+  const strokeW  = active ? 2.5 : 1.5;
+  const dash     = active ? undefined : "6 4";
+
+  const mx = (from.x + to.x) / 2;
+  const my = (from.y + to.y) / 2;
+
+  const labelText  = active && edge ? edgeLabelText(edge) : null;
+  const labelOpacity = active ? 0.6 + fresh * 0.4 : 0;
+  const TW = labelText ? Math.max(labelText.length * 6.8 + 18, 52) : 0;
+  const TH = 18;
+  const bg = active && edge ? (FLOW_BG[edge.flow] ?? "#ffffff") : "#ffffff";
+
+  return (
+    <g>
+      <line
+        x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+        stroke={color}
+        strokeWidth={strokeW}
+        strokeDasharray={dash}
+        opacity={lineOp}
+        strokeLinecap="round"
+      />
+      {labelText && (
+        <g style={{ opacity: labelOpacity }}>
+          <rect
+            x={mx - TW / 2} y={my - TH / 2}
+            width={TW} height={TH} rx={5}
+            fill={bg} stroke={color} strokeWidth="1"
+          />
+          <text
+            x={mx} y={my + 4.5}
+            textAnchor="middle"
+            fill={color} fontSize="9" fontWeight="600" fontFamily="inherit"
+          >{labelText}</text>
+        </g>
+      )}
+    </g>
+  );
+}
+
+// ─── Main component ──────────────────────────────────────────────
+export function DeviceTopology() {
+  const agents         = useStore((s) => s.agents);
+  const edges          = useStore((s) => s.edges);
+  const blackboard     = useStore((s) => s.blackboard);
+  const events         = useStore((s) => s.events);
+  const taskIO         = useStore((s) => s.taskIO);
+  const expireEdges    = useStore((s) => s.expireEdges);
+  const expireActivity = useStore((s) => s.expireActivity);
+  const [, tick]       = useState(0);
+
+  // Refs for SVG line measurement
+  const containerRef = useRef<HTMLDivElement>(null);
+  const userRef      = useRef<HTMLDivElement>(null);
+  const hubRef       = useRef<HTMLDivElement>(null);
+  const pcRef        = useRef<HTMLDivElement>(null);
+  const tvRef        = useRef<HTMLDivElement>(null);
+  const bbRef        = useRef<HTMLDivElement>(null);
+
+  const [pos, setPos]       = useState<Record<string, CardPos>>({});
+  const [svgSize, setSvgSize] = useState({ w: 0, h: 0 });
+  const prevPosRef           = useRef<Record<string, CardPos>>({});
+
+  const taskId = taskIO?.taskId;
+
+  // ─── RAF loop: expire + measure + tick ─────────────────────────
+  const rafRef = useRef<number>(0);
+  useEffect(() => {
+    let lastT = 0;
+
+    const measure = () => {
+      const cr = containerRef.current?.getBoundingClientRect();
+      if (!cr) return;
+      const map: Record<string, React.RefObject<HTMLDivElement | null>> = {
+        user: userRef, hub: hubRef, pc: pcRef, tv: tvRef, bb: bbRef,
+      };
+      const next: Record<string, CardPos> = {};
+      for (const [id, ref] of Object.entries(map)) {
+        if (!ref.current) continue;
+        const r = ref.current.getBoundingClientRect();
+        next[id] = { x: r.left - cr.left, y: r.top - cr.top, w: r.width, h: r.height };
+      }
+      const changed =
+        Object.keys(next).length !== Object.keys(prevPosRef.current).length ||
+        Object.entries(next).some(([id, p]) => {
+          const q = prevPosRef.current[id];
+          return !q || q.x !== p.x || q.y !== p.y || q.w !== p.w || q.h !== p.h;
+        });
+      if (changed) { prevPosRef.current = next; setPos(next); }
+
+      const newW = cr.width;
+      const newH = containerRef.current?.scrollHeight ?? cr.height;
+      setSvgSize(prev => (prev.w === newW && prev.h === newH ? prev : { w: newW, h: newH }));
+    };
+
+    const loop = (now: number) => {
+      if (now - lastT > 200) {
+        lastT = now;
+        expireEdges(Date.now());
+        expireActivity(Date.now());
+        measure();
+        tick((n) => (n + 1) % 1_000_000);
+      }
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [expireEdges, expireActivity]);
+
+  const wall     = Date.now();
+  const edgeList = useMemo(() => Object.values(edges), [edges]);
+  const hasBB    = Object.keys(blackboard).length > 0;
+  const hasAnyAgent = AGENTS.some((a) => !!agents[a.id]);
+
+  // ─── Best edge between two nodes ───────────────────────────────
+  function bestEdge(a: string, b: string): EdgeState | null {
+    let best: EdgeState | null = null;
+    for (const e of edgeList) {
+      const hit = (e.from === a && e.to === b) || (e.from === b && e.to === a);
+      if (hit && wall - e.ts < EDGE_TTL_MS && (!best || e.ts > best.ts)) best = e;
+    }
+    return best;
+  }
+
+  function bestBBEdge(agentId: string): EdgeState | null {
+    let best: EdgeState | null = null;
+    for (const e of edgeList) {
+      const hit =
+        (e.from === agentId && e.to === "__blackboard__") ||
+        (e.from === "__blackboard__" && e.to === agentId);
+      if (hit && wall - e.ts < EDGE_TTL_MS && (!best || e.ts > best.ts)) best = e;
+    }
+    return best;
+  }
+
+  // ─── Per-agent state ────────────────────────────────────────────
+  const agState = useMemo(() => {
+    return AGENTS.map((spec) => {
+      const agent   = agents[spec.id];
+      const online   = agent ? agent.phase === "start" : false;
+      const thinking = !!(agent?.thinking && agent.thinkingTs &&
+                         wall - agent.thinkingTs < THINKING_TTL_MS);
+      const busy     = !!(agent?.activity?.phase === "start" &&
+                         wall - (agent.activity?.ts ?? 0) < ACTIVITY_TTL_MS);
+      const toolName = agent?.activity?.tool;
+      const acts     = getAgentActivities(events, spec.id, taskId);
+      return { spec, online, thinking, busy, toolName, acts };
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, events, wall, taskId]);
+
+  const [hubState, pcState, tvState] = [agState[1], agState[0], agState[2]];
+
+  // ─── SVG edge data ──────────────────────────────────────────────
+  const pcHubEdge = bestEdge("pc", "hub");
+  const hubTvEdge = bestEdge("hub", "tv");
+  const pcBBEdge  = bestBBEdge("pc");
+  const tvBBEdge  = bestBBEdge("tv");
+  const hubBBEdge = bestBBEdge("hub");
+
+  // ─── Card positions ─────────────────────────────────────────────
+  const userP = pos["user"];
+  const hubP  = pos["hub"];
+  const pcP   = pos["pc"];
+  const tvP   = pos["tv"];
+  const bbP   = pos["bb"];
+
+  if (!hasAnyAgent) {
+    return (
+      <div className="topo-empty-state">
+        <div style={{ fontSize: 36, opacity: 0.3 }}>⏳</div>
+        <div>시뮬레이터 대기 중…</div>
+        <code>npm run sim</code>
+      </div>
+    );
+  }
+
+  return (
+    <div className="topo-scroll">
+      <div className="topo-container" ref={containerRef}>
+
+        {/* SVG overlay — connection lines */}
+        <svg
+          style={{
+            position: "absolute", top: 0, left: 0,
+            width: svgSize.w || "100%", height: svgSize.h || "100%",
+            pointerEvents: "none", overflow: "visible", zIndex: 0,
+          }}
+        >
+          {/* User → Hub */}
+          {userP && hubP && (
+            <SvgEdge
+              from={cardPt(userP, "bottom")}
+              to={cardPt(hubP, "top")}
+              edge={null}
+              wall={wall}
+              alwaysShow
+            />
+          )}
+
+          {/* Hub ↔ PC (always visible, colored when active) */}
+          {hubP && pcP && (
+            <SvgEdge
+              from={cardPt(hubP, "bottom")}
+              to={cardPt(pcP, "top")}
+              edge={pcHubEdge}
+              wall={wall}
+              alwaysShow
+            />
+          )}
+
+          {/* Hub ↔ TV (always visible, colored when active) */}
+          {hubP && tvP && (
+            <SvgEdge
+              from={cardPt(hubP, "bottom")}
+              to={cardPt(tvP, "top")}
+              edge={hubTvEdge}
+              wall={wall}
+              alwaysShow
+            />
+          )}
+
+          {/* PC → BB (show when BB has data) */}
+          {pcP && bbP && hasBB && (
+            <SvgEdge
+              from={cardPt(pcP, "bottom")}
+              to={{ x: bbP.x + bbP.w * 0.25, y: bbP.y }}
+              edge={pcBBEdge}
+              wall={wall}
+              alwaysShow
+            />
+          )}
+
+          {/* TV → BB */}
+          {tvP && bbP && hasBB && (
+            <SvgEdge
+              from={cardPt(tvP, "bottom")}
+              to={{ x: bbP.x + bbP.w * 0.75, y: bbP.y }}
+              edge={tvBBEdge}
+              wall={wall}
+              alwaysShow
+            />
+          )}
+
+          {/* Hub → BB */}
+          {hubP && bbP && hasBB && (
+            <SvgEdge
+              from={cardPt(hubP, "bottom")}
+              to={cardPt(bbP, "top")}
+              edge={hubBBEdge}
+              wall={wall}
+              alwaysShow
+            />
+          )}
         </svg>
 
-        {!hasAnyAgent ? (
-          <div className="topology-empty">
-            시뮬레이터 대기 중…<br />
-            <code>npm run sim</code>
+        {/* ── User request node ── */}
+        {taskIO?.request && (
+          <div className="topo-user-row">
+            <div ref={userRef}>
+              <UserNode request={taskIO.request} done={taskIO.result != null} />
+            </div>
           </div>
-        ) : (
-          <>
-            {/* Task I/O — horizontal directional area */}
-            <TaskIOSection taskIO={taskIO} />
+        )}
 
-            {/* Agent groups row */}
-            <div className="device-row">
+        {/* ── Hub row ── */}
+        <div className="topo-hub-row">
+          <ActivityStack items={hubState.acts} />
+          <div ref={hubRef} style={{ zIndex: 1 }}>
+            <AgentCard {...hubState} />
+          </div>
+        </div>
 
-              {/* ── PC: [activity-sidebar | card] ── */}
-              {(() => {
-                const spec = AGENTS[0]; // pc
-                const agent = agents[spec.id];
-                const online = agent ? agent.phase === "start" : false;
-                const thinking = !!(agent?.thinking && agent.thinkingTs && wall - agent.thinkingTs < THINKING_TTL_MS);
-                const busy = !!(agent?.activity?.phase === "start" && wall - (agent.activity?.ts ?? 0) < ACTIVITY_TTL_MS);
-                const toolName = agent?.activity?.tool;
-                const recentlyActive = !!(agent && wall - agent.lastSeen < 1500);
-                return (
-                  <div className="device-group pc">
-                    {/* Activities — LEFT side of PC card */}
-                    <div className="act-sidebar left">
-                      {actItems.pc.length === 0 ? (
-                        <div className="act-sidebar-empty">대기 중</div>
-                      ) : (
-                        actItems.pc.map(item => <ActCard key={item.key} item={item} />)
-                      )}
-                    </div>
-                    {/* PC card */}
-                    <div
-                      ref={(el) => { cardRefs.current["pc"] = el; }}
-                      className={[
-                        "device-card", "pc",
-                        recentlyActive ? "active" : "",
-                        !online && agent ? "offline" : "",
-                        thinking ? "thinking" : "",
-                        busy ? "busy" : "",
-                      ].filter(Boolean).join(" ")}
-                    >
-                      <div className="device-status-bar">
-                        <span className={`hb-dot ${online ? "alive" : agent ? "dead" : "dormant"}`} />
-                        <span className="device-status-label">
-                          {thinking ? "thinking…" : busy ? `⚙ ${toolName ?? "working"}` : online ? "online" : "offline"}
-                        </span>
-                      </div>
-                      <PCIllus thinking={thinking} busy={busy} toolName={toolName} />
-                      <div className="device-info">
-                        <span className="device-name">{spec.name}</span>
-                        <span className="device-role-badge">{spec.role}</span>
-                      </div>
-                      <div className="device-color-bar" />
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* ── HUB: elevated, orchestrator crown ── */}
-              {(() => {
-                const spec = AGENTS[1]; // hub
-                const agent = agents[spec.id];
-                const online = agent ? agent.phase === "start" : false;
-                const thinking = !!(agent?.thinking && agent.thinkingTs && wall - agent.thinkingTs < THINKING_TTL_MS);
-                const busy = !!(agent?.activity?.phase === "start" && wall - (agent.activity?.ts ?? 0) < ACTIVITY_TTL_MS);
-                const toolName = agent?.activity?.tool;
-                const recentlyActive = !!(agent && wall - agent.lastSeen < 1500);
-                return (
-                  <div className="device-group hub">
-                    {/* Orchestrator crown label */}
-                    <div className="hub-orch-crown">
-                      🎯 <span>Orchestrator</span>
-                    </div>
-                    {/* Hub card */}
-                    <div
-                      ref={(el) => { cardRefs.current["hub"] = el; }}
-                      className={[
-                        "device-card", "hub",
-                        recentlyActive ? "active" : "",
-                        !online && agent ? "offline" : "",
-                        thinking ? "thinking" : "",
-                        busy ? "busy" : "",
-                      ].filter(Boolean).join(" ")}
-                    >
-                      <div className="device-status-bar hub">
-                        <span className={`hb-dot ${online ? "alive" : agent ? "dead" : "dormant"}`} />
-                        <span className="device-status-label">
-                          {thinking ? "thinking…" : busy ? `⚙ ${toolName ?? "working"}` : online ? "online" : "offline"}
-                        </span>
-                      </div>
-                      <HubIllus thinking={thinking} busy={busy} toolName={toolName} />
-                      <div className="device-info">
-                        <span className="device-name">{spec.name}</span>
-                        <span className="device-role-badge orch">{spec.role}</span>
-                      </div>
-                      <div className="device-color-bar" />
-                    </div>
-                    {/* Hub activities — horizontal below card */}
-                    <div className="hub-act-row">
-                      {actItems.hub.map(item => <ActCard key={item.key} item={item} />)}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* ── TV: [card | activity-sidebar] ── */}
-              {(() => {
-                const spec = AGENTS[2]; // tv
-                const agent = agents[spec.id];
-                const online = agent ? agent.phase === "start" : false;
-                const thinking = !!(agent?.thinking && agent.thinkingTs && wall - agent.thinkingTs < THINKING_TTL_MS);
-                const busy = !!(agent?.activity?.phase === "start" && wall - (agent.activity?.ts ?? 0) < ACTIVITY_TTL_MS);
-                const toolName = agent?.activity?.tool;
-                const recentlyActive = !!(agent && wall - agent.lastSeen < 1500);
-                return (
-                  <div className="device-group tv">
-                    {/* TV card */}
-                    <div
-                      ref={(el) => { cardRefs.current["tv"] = el; }}
-                      className={[
-                        "device-card", "tv",
-                        recentlyActive ? "active" : "",
-                        !online && agent ? "offline" : "",
-                        thinking ? "thinking" : "",
-                        busy ? "busy" : "",
-                      ].filter(Boolean).join(" ")}
-                    >
-                      <div className="device-status-bar">
-                        <span className={`hb-dot ${online ? "alive" : agent ? "dead" : "dormant"}`} />
-                        <span className="device-status-label">
-                          {thinking ? "thinking…" : busy ? `⚙ ${toolName ?? "working"}` : online ? "online" : "offline"}
-                        </span>
-                      </div>
-                      <TVIllus online={online} thinking={thinking} busy={busy} toolName={toolName} />
-                      <div className="device-info">
-                        <span className="device-name">{spec.name}</span>
-                        <span className="device-role-badge">{spec.role}</span>
-                      </div>
-                      <div className="device-color-bar" />
-                    </div>
-                    {/* Activities — RIGHT side of TV card */}
-                    <div className="act-sidebar right">
-                      {actItems.tv.length === 0 ? (
-                        <div className="act-sidebar-empty">대기 중</div>
-                      ) : (
-                        actItems.tv.map(item => <ActCard key={item.key} item={item} />)
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
-
+        {/* ── Worker row ── */}
+        <div className="topo-worker-row">
+          {/* PC: activity stack LEFT, card RIGHT */}
+          <div className="topo-agent-block pc">
+            <ActivityStack items={pcState.acts} />
+            <div ref={pcRef} style={{ zIndex: 1 }}>
+              <AgentCard {...pcState} />
             </div>
+          </div>
 
-            {/* Blackboard Server — below, compact */}
-            <div className="bb-server-wrap">
-              <div className="bb-server" ref={bbRef}>
-                <div className="bb-rack-bar">
-                  <div className="bb-rack-leds">
-                    <span className="bb-rack-led pwr" />
-                    <span className={`bb-rack-led net ${bbActive ? "active" : ""}`} />
-                    <span className={`bb-rack-led hdd ${bbActive ? "active" : ""}`} />
-                  </div>
-                  <div className="bb-rack-label">BLACKBOARD SERVER</div>
-                  <div className="bb-rack-slot" />
-                </div>
-                <div className="bb-server-body">
-                  <div className="bb-server-head">
-                    <span className="bb-server-icon">🗄️</span>
-                    <div className="bb-server-title-wrap">
-                      <div className="bb-server-title">Shared State</div>
-                      <div className="bb-server-sub">Key-Value Store</div>
-                    </div>
-                    {Object.keys(blackboard).length > 0 && (
-                      <span className="bb-server-cnt">{Object.keys(blackboard).length} keys</span>
-                    )}
-                  </div>
-                  {bbEntries.length === 0 ? (
-                    <div className="bb-server-empty">No data — waiting for writes</div>
-                  ) : (
-                    <div className="bb-server-rows">
-                      {bbEntries.map(([key, entry]) => {
-                        const st = bbKeyState(key);
-                        return (
-                          <div key={key} className={`bb-server-row ${st ?? ""}`}>
-                            <span className={`bb-op-badge ${st ?? "idle"}`}>{st === "write" ? "W" : st === "read" ? "R" : ""}</span>
-                            <span className="bb-server-key">{key}</span>
-                            <span className="bb-server-val">{snip(entry.value)}</span>
-                            <span className={`bb-server-by ${entry.by}`}>{entry.by}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
+          {/* TV: card LEFT, activity stack RIGHT */}
+          <div className="topo-agent-block tv">
+            <div ref={tvRef} style={{ zIndex: 1 }}>
+              <AgentCard {...tvState} />
             </div>
-          </>
+            <ActivityStack items={tvState.acts} />
+          </div>
+        </div>
+
+        {/* ── Blackboard ── */}
+        {hasBB && (
+          <div className="topo-bb-row">
+            <div ref={bbRef} style={{ width: "100%", maxWidth: 520, zIndex: 1 }}>
+              <BBNode blackboard={blackboard} edgeList={edgeList} />
+            </div>
+          </div>
         )}
       </div>
     </div>
