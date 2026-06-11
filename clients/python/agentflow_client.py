@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import threading
 import urllib.request
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Union
 
 
 class AgentFlowClient:
@@ -82,23 +82,27 @@ class AgentFlowClient:
         label: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Agent comes online — call at startup so it appears in the topology immediately."""
         self.emit(_drop_none({
             "kind": "agent", "phase": "start",
             "agentId": agent_id, "role": role, "label": label,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     def agent_end(
         self,
         agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Agent goes offline."""
         self.emit(_drop_none({
             "kind": "agent", "phase": "end",
             "agentId": agent_id, "taskId": task_id,
+            "traceId": trace_id, "causedBy": caused_by,
         }))
 
     # ---- Tool ----
@@ -108,32 +112,36 @@ class AgentFlowClient:
         tool: str,
         agent_id: Optional[str] = None,
         input: Any = None,
+        summary: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Mark the agent as busy with a tool."""
         self.emit(_drop_none({
             "kind": "tool", "phase": "start",
             "agentId": agent_id, "tool": tool,
-            "input": input, "taskId": task_id, "traceId": trace_id,
+            "input": input, "summary": summary,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     def tool_end(
         self,
         tool: str,
         agent_id: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[Literal["ok", "error"]] = None,
         output: Any = None,
         summary: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Release the busy state and record the result."""
         self.emit(_drop_none({
             "kind": "tool", "phase": "end",
             "agentId": agent_id, "tool": tool,
             "status": status, "output": output, "summary": summary,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     # ---- Delegate ----
@@ -147,13 +155,14 @@ class AgentFlowClient:
         payload: Any = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Dispatch work to another agent."""
         self.emit(_drop_none({
             "kind": "delegate", "phase": "dispatch",
             "agentId": agent_id or frm, "from": frm, "to": to,
             "task": task, "payload": payload,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     def delegate_return(
@@ -161,15 +170,18 @@ class AgentFlowClient:
         frm: str,
         to: str,
         agent_id: Optional[str] = None,
+        task: Optional[str] = None,
         payload: Any = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Return results to the delegating agent."""
         self.emit(_drop_none({
             "kind": "delegate", "phase": "return",
             "agentId": agent_id or frm, "from": frm, "to": to,
-            "payload": payload, "taskId": task_id, "traceId": trace_id,
+            "task": task, "payload": payload,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     # ---- Blackboard ----
@@ -181,12 +193,13 @@ class AgentFlowClient:
         agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Write a value to the shared blackboard."""
         self.emit(_drop_none({
             "kind": "blackboard", "op": "write",
             "agentId": agent_id, "key": key, "value": value,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     def bb_read(
@@ -195,12 +208,13 @@ class AgentFlowClient:
         agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Read a value from the shared blackboard."""
         self.emit(_drop_none({
             "kind": "blackboard", "op": "read",
             "agentId": agent_id, "key": key,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     # ---- Noti ----
@@ -214,13 +228,14 @@ class AgentFlowClient:
         message: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Broadcast to agents: 'check the blackboard at `key`'."""
         self.emit(_drop_none({
             "kind": "noti", "phase": "broadcast",
             "agentId": agent_id or frm, "from": frm, "to": to,
             "key": key, "message": message,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     def ack(
@@ -232,13 +247,14 @@ class AgentFlowClient:
         message: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Acknowledge a broadcast: 'I've read and responded to `key`'."""
         self.emit(_drop_none({
             "kind": "noti", "phase": "ack",
             "agentId": agent_id or frm, "from": frm, "to": to,
             "key": key, "message": message,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     # ---- Task (Hub only) ----
@@ -250,12 +266,14 @@ class AgentFlowClient:
         scenario: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Hub receives a task from the user."""
         self.emit(_drop_none({
             "kind": "task", "phase": "input",
             "agentId": agent_id, "request": request,
-            "scenario": scenario, "taskId": task_id, "traceId": trace_id,
+            "scenario": scenario, "taskId": task_id,
+            "traceId": trace_id, "causedBy": caused_by,
         }))
 
     def task_output(
@@ -265,12 +283,14 @@ class AgentFlowClient:
         scenario: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Hub returns the final result to the user."""
         self.emit(_drop_none({
             "kind": "task", "phase": "output",
             "agentId": agent_id, "result": result,
-            "scenario": scenario, "taskId": task_id, "traceId": trace_id,
+            "scenario": scenario, "taskId": task_id,
+            "traceId": trace_id, "causedBy": caused_by,
         }))
 
     # ---- Message (agent internal narration) ----
@@ -282,12 +302,13 @@ class AgentFlowClient:
         agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        caused_by: Optional[str] = None,
     ) -> None:
         """Agent narrates what it's doing — shown in the Agent 대화 panel."""
         self.emit(_drop_none({
             "kind": "message",
             "agentId": agent_id, "title": title, "content": content,
-            "taskId": task_id, "traceId": trace_id,
+            "taskId": task_id, "traceId": trace_id, "causedBy": caused_by,
         }))
 
     # ---- flush / close ----

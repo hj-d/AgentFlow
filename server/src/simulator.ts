@@ -1,12 +1,15 @@
 // Simulator — HomeHub orchestration demo.
 //
 // Agents:
-//   hub  📡 HomeHub   Orchestrator + family photo/video storage
-//   pc   🖥️ PC Agent   Content creation, video editing, music library
-//   tv   📺 TV Agent   Content preferences, family music favorites
+//   hub     🏠 HomeHub   Orchestrator + family photo/video storage
+//   pc      💻 PC Agent   Content creation, video editing, music library
+//   tv      📺 TV Agent   Content preferences, family music favorites
+//   mobile  📱 Mobile     Family notifications, presence
+//   speaker 🔈 Speaker    Living-room audio (generic/common device)
 //
 // Scenario 1 — Hub discovers capabilities via tool, then delegates work.
 // Scenario 2 — Hub uses Blackboard+Noti first (parallel PC·TV), then delegates.
+// Scenario 3 — Movie night: TV + Speaker + Mobile (dynamic multi-device fan-out).
 
 import { makeEventId } from "./id.js";
 import type { FlowEventInput } from "./types.js";
@@ -59,9 +62,11 @@ async function post(batch: FlowEventInput[]) {
 // ---- presence management ----
 const seen = new Set<string>();
 const AGENTS = [
-  { agentId: "hub", role: "orchestrator", label: "HomeHub" },
-  { agentId: "pc",  role: "creator",      label: "PC Agent" },
-  { agentId: "tv",  role: "display",      label: "TV Agent" },
+  { agentId: "hub",     role: "orchestrator", label: "HomeHub" },
+  { agentId: "pc",      role: "creator",      label: "PC Agent" },
+  { agentId: "tv",      role: "display",      label: "TV Agent" },
+  { agentId: "mobile",  role: "notifier",     label: "Mobile" },
+  { agentId: "speaker", role: "audio",        label: "Speaker" },
 ];
 
 function ensurePresence(agentIds: string[], space: string): FlowEventInput[] {
@@ -70,28 +75,31 @@ function ensurePresence(agentIds: string[], space: string): FlowEventInput[] {
     const key = `${space}/${id}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const spec = AGENTS.find((a) => a.agentId === id)!;
-    out.push(agentEv(id, "start", spec.role, spec.label, space));
+    const spec = AGENTS.find((a) => a.agentId === id);
+    out.push(agentEv(id, "start", spec?.role ?? "agent", spec?.label ?? id, space));
   }
   return out;
 }
 
 // ---- task runner ----
-interface ScenarioTask { id: string; space: string; step: number; scenario: 1 | 2 }
+type ScenarioNo = 1 | 2 | 3;
+interface ScenarioTask { id: string; space: string; step: number; scenario: ScenarioNo }
 
 // S1: 0~27 + default → S1_LAST = 28
 // S2: 0~33 + default → S2_LAST = 34
+// S3: 0~17 + default → S3_LAST = 18
 const S1_LAST = 28;
 const S2_LAST = 34;
+const S3_LAST = 18;
 
 let taskSeq = 0;
 const active: ScenarioTask[] = [];
-let nextScenario: 1 | 2 = 1;
+let nextScenario: ScenarioNo = 1;
 
 function spawnTask(): ScenarioTask {
   taskSeq++;
   const scenario = nextScenario;
-  nextScenario = scenario === 1 ? 2 : 1;
+  nextScenario = scenario === 1 ? 2 : scenario === 2 ? 3 : 1;
   return {
     id: `task-${taskSeq.toString(36)}-${Math.floor(Math.random() * 1296).toString(36)}`,
     space: pick(SPACES),
@@ -488,12 +496,124 @@ function advanceS2(task: ScenarioTask): FlowEventInput[] {
   }
 }
 
+// ============================================================
+// Scenario 3: Movie night — TV·Speaker·Mobile fan-out
+// (Hub 아래에 디바이스가 동적으로 늘어나는 멀티 디바이스 데모)
+// ============================================================
+function advanceS3(task: ScenarioTask): FlowEventInput[] {
+  const { id: t, space: sp } = task;
+  switch (task.step++) {
+
+    // ── 0. Task arrives ──────────────────────────────────────
+    case 0: return [
+      taskEv("input", "오늘 저녁 거실 영화의 밤 준비하고 가족들에게 알려줘", undefined, "scenario-3", sp, t),
+      msg("hub", "새 요청 수신 📨", "가족 영화의 밤 준비 요청이야! 화면·사운드·알림까지 여러 디바이스의 협력이 필요하겠어. 어떤 디바이스들이 깨어있는지 확인해볼게.", sp, t),
+    ];
+
+    // ── 1~2. Hub discovers devices ────────────────────────────
+    case 1: return [
+      toolStart("hub", "discover_agents", { query: "media_devices" }, sp, t),
+      msg("hub", "디바이스 스캔 중 🔍", "거실 주변의 미디어 디바이스를 검색하고 있어.", sp, t),
+    ];
+    case 2: return [
+      toolEnd("hub", "discover_agents", "ok", {
+        tv:      { tools: ["set_movie_mode", "play_video"] },
+        speaker: { tools: ["set_sound_profile"] },
+        mobile:  { tools: ["push_notification"] },
+      }, sp, t),
+      msg("hub", "디바이스 3대 발견! 📋", "TV(화면), Speaker(사운드), Mobile(알림) 3대가 응답했어. 영화 모드 셋업을 분담시킬게.", sp, t),
+    ];
+
+    // ── 3. Hub delegates to TV ────────────────────────────────
+    case 3: return [
+      delegate("hub", "tv", "dispatch", "거실 TV 영화 모드로 전환해줘", null, sp, t),
+      msg("hub", "TV에 영화 모드 요청 📺", "TV에게 시네마 화면 모드 전환을 요청했어.", sp, t),
+    ];
+    case 4: return [
+      toolStart("tv", "set_movie_mode", { picture: "cinema", brightness: "40%" }, sp, t),
+      msg("tv", "영화 모드 전환 중! 🎬", "화면 모드를 시네마로, 밝기를 40%로 조정하고 있어.", sp, t),
+    ];
+    case 5: return [
+      toolEnd("tv", "set_movie_mode", "ok", { picture: "cinema", brightness: "40%", hdr: true }, sp, t),
+      bbWrite("tv", "screen_ready", { mode: "cinema", hdr: true }, sp, t),
+      msg("tv", "화면 준비 완료! ✅", "시네마 모드 + HDR 활성화 완료. 상태를 Blackboard에 기록했어.", sp, t),
+    ];
+    case 6: return [
+      delegate("tv", "hub", "return", undefined, { status: "screen_ready" }, sp, t),
+    ];
+
+    // ── 7. Hub delegates to Speaker ───────────────────────────
+    case 7: return [
+      delegate("hub", "speaker", "dispatch", "사운드를 영화관 프로파일로 설정해줘", null, sp, t),
+      msg("hub", "Speaker에 사운드 요청 🔈", "거실 스피커에게 영화관급 사운드 프로파일 설정을 요청했어.", sp, t),
+    ];
+    case 8: return [
+      toolStart("speaker", "set_sound_profile", { profile: "cinema_dts", volume: 45 }, sp, t),
+      msg("speaker", "사운드 프로파일 설정 중 🎚️", "Cinema DTS 프로파일 적용 + 볼륨 45로 맞추는 중이야.", sp, t),
+    ];
+    case 9: return [
+      toolEnd("speaker", "set_sound_profile", "ok", { profile: "cinema_dts", volume: 45, subwoofer: "on" }, sp, t),
+      bbWrite("speaker", "sound_profile", { profile: "cinema_dts", volume: 45 }, sp, t),
+      msg("speaker", "사운드 준비 완료! ✅", "Cinema DTS + 서브우퍼 활성화 완료. Blackboard에 기록했어.", sp, t),
+    ];
+    case 10: return [
+      delegate("speaker", "hub", "return", undefined, { status: "sound_ready" }, sp, t),
+    ];
+
+    // ── 11. Hub delegates to Mobile ───────────────────────────
+    case 11: return [
+      delegate("hub", "mobile", "dispatch", "가족들에게 영화의 밤 시작 알림 보내줘", null, sp, t),
+      msg("hub", "Mobile에 알림 요청 📱", "가족 모두의 휴대폰으로 영화의 밤 알림을 보내달라고 했어.", sp, t),
+    ];
+    case 12: return [
+      toolStart("mobile", "push_notification", { to: "가족 4명", message: "🍿 오늘 저녁 거실 영화의 밤!" }, sp, t),
+      msg("mobile", "알림 발송 중 📨", "가족 4명의 기기로 푸시 알림을 보내고 있어.", sp, t),
+    ];
+    case 13: return [
+      toolEnd("mobile", "push_notification", "ok", { delivered: 4, read: 2 }, sp, t),
+      msg("mobile", "알림 전송 완료! ✅", "4명 모두에게 전달 완료, 벌써 2명이 읽었어! 다들 기대하는 중 🍿", sp, t),
+    ];
+    case 14: return [
+      delegate("mobile", "hub", "return", undefined, { delivered: 4 }, sp, t),
+    ];
+
+    // ── 15~17. Hub final check via Blackboard ─────────────────
+    case 15: return [
+      bbRead("hub", "screen_ready", sp, t),
+      bbRead("hub", "sound_profile", sp, t),
+      msg("hub", "최종 점검 중 🔎", "Blackboard에서 화면·사운드 상태를 확인하고 있어. 모든 디바이스가 준비됐는지 점검!", sp, t),
+    ];
+    case 16: return [
+      toolStart("hub", "verify_setup", { checks: ["screen", "sound", "notification"] }, sp, t),
+    ];
+    case 17: return [
+      toolEnd("hub", "verify_setup", "ok", { screen: "cinema", sound: "cinema_dts", notified: 4 }, sp, t),
+      msg("hub", "전체 셋업 검증 완료! ✅", "화면 ✓ 사운드 ✓ 알림 ✓ — 모든 준비가 끝났어!", sp, t),
+    ];
+
+    // ── Default: task complete ─────────────────────────────────
+    default: return [
+      taskEv("output", undefined, {
+        message: "거실 영화의 밤 준비 완료! 가족들이 모이는 중입니다 🍿",
+        screen: "cinema",
+        sound: "cinema_dts",
+        notified: 4,
+      }, "scenario-3", sp, t),
+      msg("hub", "🎊 영화의 밤 준비 완료!", "멀티 디바이스 협업 성공!\n① 디바이스 3대 탐색 → ② TV 영화 모드 → ③ Speaker 사운드 → ④ Mobile 알림 → ⑤ 최종 점검\nTV·Speaker·Mobile이 각자 역할을 완벽하게 해냈어! 🍿", sp, t),
+    ];
+  }
+}
+
 function advance(task: ScenarioTask): FlowEventInput[] {
-  return task.scenario === 1 ? advanceS1(task) : advanceS2(task);
+  switch (task.scenario) {
+    case 1: return advanceS1(task);
+    case 2: return advanceS2(task);
+    case 3: return advanceS3(task);
+  }
 }
 
 function lastStep(task: ScenarioTask): number {
-  return task.scenario === 1 ? S1_LAST : S2_LAST;
+  return task.scenario === 1 ? S1_LAST : task.scenario === 2 ? S2_LAST : S3_LAST;
 }
 
 // ---- main tick ----
@@ -533,6 +653,7 @@ console.log(
   `[sim] HomeHub demo → ${INGEST_URL} every ${INTERVAL_MS}ms\n` +
   `  Scenario 1: Hub via discover_agents — ${S1_LAST + 1} steps\n` +
   `  Scenario 2: Hub via Blackboard+Noti (parallel PC·TV) — ${S2_LAST + 1} steps\n` +
+  `  Scenario 3: Movie night TV·Speaker·Mobile fan-out — ${S3_LAST + 1} steps\n` +
   `  Spaces: ${SPACES.join(", ")}`
 );
 setInterval(tick, INTERVAL_MS);

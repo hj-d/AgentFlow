@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import type { FlowEvent } from "../types";
 
@@ -115,16 +115,24 @@ function getBadgeInfo(e: FlowEvent): { label: string; cls: string } {
 }
 
 // ---- Single event row ----
+// 클릭 시 상세 토글 + 중앙 토폴로지의 활동 카드와 상호 하이라이트.
 function EvRow({ event: e }: { event: FlowEvent }) {
   const [open, setOpen] = useState(false);
+  const linkedEventId = useStore((s) => s.linkedEventId);
+  const setLinkedEventId = useStore((s) => s.setLinkedEventId);
   const desc = getEvDesc(e);
   const badge = getBadgeInfo(e);
   const hasDetail = desc.detail != null;
+  const linked = linkedEventId === e.eventId;
 
   return (
     <div
-      className={`ev-row ${badge.cls}${hasDetail ? " clickable" : ""}${open ? " open" : ""}`}
-      onClick={() => hasDetail && setOpen((o) => !o)}
+      data-evid={e.eventId}
+      className={`ev-row ${badge.cls}${hasDetail ? " clickable" : ""}${open ? " open" : ""}${linked ? " linked" : ""}`}
+      onClick={() => {
+        if (hasDetail) setOpen((o) => !o);
+        setLinkedEventId(e.eventId);
+      }}
     >
       <div className="ev-row-main">
         <span className="ev-time">{fmtTime(e.ts)}</span>
@@ -154,6 +162,15 @@ function EvRow({ event: e }: { event: FlowEvent }) {
 function EventTimeline() {
   const events = useStore((s) => s.events);
   const selectedTask = useStore((s) => s.selectedTask);
+  const linkedEventId = useStore((s) => s.linkedEventId);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // 중앙 패널에서 선택된 이벤트를 타임라인에서도 보이게 스크롤
+  useEffect(() => {
+    if (!linkedEventId || !listRef.current) return;
+    const el = listRef.current.querySelector(`[data-evid="${CSS.escape(linkedEventId)}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [linkedEventId]);
 
   const filtered = selectedTask
     ? events.filter((e) => !e.taskId || e.taskId === selectedTask)
@@ -170,7 +187,7 @@ function EventTimeline() {
   }
 
   return (
-    <div className="ev-timeline">
+    <div className="ev-timeline" ref={listRef}>
       {filtered.map((e) => (
         <EvRow key={e.eventId} event={e} />
       ))}
@@ -200,6 +217,7 @@ function TasksTab() {
   const SCENARIO_LABELS: Record<string, string> = {
     "scenario-1": "S1",
     "scenario-2": "S2",
+    "scenario-3": "S3",
   };
 
   return (
@@ -282,6 +300,7 @@ export function InfoPanel() {
   const scenLabels: Record<string, string> = {
     "scenario-1": "S1: 도구 기반",
     "scenario-2": "S2: 블랙보드+병렬",
+    "scenario-3": "S3: 멀티 디바이스",
   };
 
   return (

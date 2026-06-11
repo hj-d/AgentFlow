@@ -3,11 +3,12 @@ import type { FlowEvent, TaskSummary, SpaceSummary, ClientControl } from "./type
 
 // ---- agent node ----
 export interface AgentNode {
-  id: string;           // "hub" | "pc" | "tv"
+  id: string;           // "hub" | "pc" | "tv" | "mobile" | …
   agentId: string;
   phase: "start" | "end";
   role?: string;
   label?: string;
+  firstSeen: number;    // stable ordering for dynamically appearing agents
   lastSeen: number;
   activity?: { tool: string; ts: number; phase: "start" | "end" };
   thinking?: boolean;
@@ -76,6 +77,8 @@ export interface EdgeState {
 export const EDGE_TTL_MS = 5000;
 export const ACTIVITY_TTL_MS = 5000;
 export const THINKING_TTL_MS = 4000;
+export const PULSE_TTL_MS = 1600;
+export const USER_ID = "__user__";
 const MAX_REPLAY = 40;
 export const REPLAY_INTERVAL_MS = 250;
 const MAX_EVENTS = 400;
@@ -104,6 +107,7 @@ interface State {
   tasksTotal: number;
   bbSeen: boolean;
   selectedTask: string | null;
+  linkedEventId: string | null;
   space: string;
   spaces: SpaceSummary[];
   activeTab: "blackboard" | "notis" | "events" | "tasks";
@@ -118,6 +122,7 @@ interface State {
   setPaused: (p: boolean) => void;
   setRate: (r: number) => void;
   setActiveTab: (t: "blackboard" | "notis" | "events" | "tasks") => void;
+  setLinkedEventId: (id: string | null) => void;
   setTasks: (tasks: TaskSummary[], total: number) => void;
   setSpaces: (spaces: SpaceSummary[]) => void;
   setSubscribe: (fn: SubscribeFn) => void;
@@ -171,6 +176,7 @@ const emptyState = (): Partial<State> => ({
   edges: {},
   bbSeen: false,
   selectedTask: null,
+  linkedEventId: null,
 });
 
 export const useStore = create<State>((set) => ({
@@ -188,6 +194,7 @@ export const useStore = create<State>((set) => ({
   edges: {},
   bbSeen: false,
   selectedTask: null,
+  linkedEventId: null,
   isReplaying: false,
   _savedEvents: null,
   tasks: {},
@@ -203,6 +210,7 @@ export const useStore = create<State>((set) => ({
   setPaused: (p) => set({ paused: p }),
   setRate: (r) => set({ rate: r }),
   setActiveTab: (t) => set({ activeTab: t }),
+  setLinkedEventId: (id) => set((s) => ({ linkedEventId: s.linkedEventId === id ? null : id })),
   setTasks: (tasks, total) => set(() => {
     const map: Record<string, TaskSummary> = {};
     for (const t of tasks) map[t.taskId] = t;
@@ -281,7 +289,7 @@ export const useStore = create<State>((set) => ({
   }),
 
   expirePulses: (now) => set((s) => {
-    const alive = s.pulses.filter((p) => now - p.start < 1100);
+    const alive = s.pulses.filter((p) => now - p.start < PULSE_TTL_MS);
     return alive.length === s.pulses.length ? s : { pulses: alive };
   }),
   expireEdges: (now) => set((s) => {
@@ -315,7 +323,11 @@ export const useStore = create<State>((set) => ({
 function applyEvent(s: State, e: FlowEvent): State {
   if (s.paused) return s;
 
-  const agents = { ...s.agents };
+  // A new task resets the topology — agents reappear as soon as they are invoked.
+  const baseAgents = e.kind === "task" && e.phase === "input"
+    ? Object.fromEntries(Object.entries(s.agents).filter(([id]) => id === e.agentId))
+    : s.agents;
+  const agents = { ...baseAgents };
   const aid = e.agentId;
   const prev = agents[aid];
 
@@ -327,12 +339,13 @@ function applyEvent(s: State, e: FlowEvent): State {
       phase: e.phase,
       role: e.role ?? prev?.role,
       label: e.label ?? prev?.label,
+      firstSeen: prev?.firstSeen ?? e.ts,
       lastSeen: e.ts,
       activity: prev?.activity,
     };
   } else {
     if (!agents[aid]) {
-      agents[aid] = { id: aid, agentId: aid, phase: "start", lastSeen: e.ts };
+      agents[aid] = { id: aid, agentId: aid, phase: "start", firstSeen: e.ts, lastSeen: e.ts };
     } else {
       agents[aid] = { ...agents[aid], lastSeen: e.ts };
     }
@@ -341,13 +354,13 @@ function applyEvent(s: State, e: FlowEvent): State {
   // ensure delegate target agent exists
   if (e.kind === "delegate") {
     const target = e.phase === "dispatch" ? e.to : e.from;
-    if (!agents[target]) agents[target] = { id: target, agentId: target, phase: "start", lastSeen: e.ts };
+    if (!agents[target]) agents[target] = { id: target, agentId: target, phase: "start", firstSeen: e.ts, lastSeen: e.ts };
   }
   // ensure noti target agents exist
   if (e.kind === "noti") {
     const targets = Array.isArray(e.to) ? e.to : [e.to];
     for (const t of targets) {
-      if (!agents[t]) agents[t] = { id: t, agentId: t, phase: "start", lastSeen: e.ts };
+      if (!agents[t]) agents[t] = { id: t, agentId: t, phase: "start", firstSeen: e.ts, lastSeen: e.ts };
     }
   }
 
@@ -373,9 +386,9 @@ function applyEvent(s: State, e: FlowEvent): State {
   }
 
   // ---- thinking state inference ----
-  // Hub starts thinking after receiving a task
+  // Orchestrator starts thinking after receiving a task
   if (e.kind === "task" && e.phase === "input") {
-    if (agents["hub"]) agents["hub"] = { ...agents["hub"], thinking: true, thinkingTs: e.ts };
+    agents[aid] = { ...agents[aid], thinking: true, thinkingTs: e.ts };
   }
   // Delegation: sender acts → stops thinking; receiver starts thinking
   if (e.kind === "delegate") {
@@ -457,10 +470,14 @@ function applyEvent(s: State, e: FlowEvent): State {
   if (e.kind === "task") {
     if (e.phase === "input") {
       taskIO = { taskId: e.taskId ?? "", scenario: e.scenario, request: e.request, inputTs: e.ts };
+      pulses = addPulse(pulses, { from: USER_ID, to: aid, flow: "delegate", label: "📨 요청" });
+      edges = upsertEdge(edges, { from: USER_ID, to: aid, flow: "delegate", label: "요청", data: e.request, ts: e.ts });
     } else if (e.phase === "output") {
       taskIO = taskIO
         ? { ...taskIO, result: e.result, outputTs: e.ts }
         : { taskId: e.taskId ?? "", scenario: e.scenario, result: e.result, outputTs: e.ts };
+      pulses = addPulse(pulses, { from: aid, to: USER_ID, flow: "delegate", label: "✅ 완료" });
+      edges = upsertEdge(edges, { from: aid, to: USER_ID, flow: "delegate", label: "완료", data: e.result, ts: e.ts });
     }
   }
 

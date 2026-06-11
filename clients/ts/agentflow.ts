@@ -20,12 +20,19 @@
 // ---- event input types ----
 
 export interface EventBase {
+  /** Emitting agent. Falls back to the client-level default; required by the collector. */
   agentId?: string;
+  /** Workspace (top-level isolation key). Falls back to the client-level default. */
   space?: string;
+  /** Groups events of one user task end-to-end. */
   taskId?: string;
+  /** Correlates a sub-flow (e.g. one delegation round-trip). */
   traceId?: string;
+  /** eventId of the event that caused this one (causal chain). */
   causedBy?: string;
+  /** Epoch ms. Server fills if omitted. */
   ts?: number;
+  /** Server fills if omitted. */
   eventId?: string;
 }
 
@@ -138,7 +145,8 @@ export class AgentFlowClient {
     };
     if (this.opts.flushIntervalMs > 0) {
       this.timer = setInterval(() => void this.flush(), this.opts.flushIntervalMs);
-      this.timer.unref?.();
+      // Node returns a Timeout (unref keeps the process exitable); browsers return a number.
+      (this.timer as unknown as { unref?: () => void }).unref?.();
     }
   }
 
@@ -157,12 +165,12 @@ export class AgentFlowClient {
   // ---- Agent ----
 
   /** Agent comes online — call once at startup so it appears in the topology immediately. */
-  agentStart(e: Omit<AgentEventInput, "kind" | "phase"> & { agentId?: string } = {}): void {
+  agentStart(e: Omit<AgentEventInput, "kind" | "phase"> = {}): void {
     this.emit({ kind: "agent", phase: "start", ...e });
   }
 
   /** Agent goes offline. */
-  agentEnd(e: Omit<AgentEventInput, "kind" | "phase"> & { agentId?: string } = {}): void {
+  agentEnd(e: Omit<AgentEventInput, "kind" | "phase"> = {}): void {
     this.emit({ kind: "agent", phase: "end", ...e });
   }
 
@@ -235,16 +243,24 @@ export class AgentFlowClient {
 
   // ---- flush / close ----
 
+  /** Send everything queued in one POST. On failure the batch is re-queued (oldest first). */
   async flush(): Promise<void> {
     if (this.queue.length === 0) return;
     const batch = this.queue;
     this.queue = [];
     try {
-      await this.opts.fetchImpl(this.opts.url, {
+      const res = await this.opts.fetchImpl(this.opts.url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(batch),
       });
+      // Global fetch resolves on 4xx/5xx — treat HTTP errors as send failures
+      // (parity with the Python SDK, where urlopen raises HTTPError).
+      const ok = (res as { ok?: unknown } | null | undefined)?.ok;
+      if (ok === false) {
+        const status = (res as { status?: unknown }).status;
+        throw new Error(`AgentFlow collector responded ${String(status ?? "with an HTTP error")}`);
+      }
     } catch (err) {
       this.queue = batch.concat(this.queue).slice(-this.opts.maxQueue);
       this.opts.onError?.(err);

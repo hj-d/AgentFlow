@@ -1,18 +1,7 @@
 import { useMemo } from "react";
 import { useStore } from "../store";
 import type { FlowEvent } from "../types";
-
-// Agent color palette — hub is always "right", others cycle through palette
-const AGENT_META: Record<string, { icon: string; name: string; cls: string }> = {
-  hub: { icon: "📡", name: "HomeHub", cls: "hub" },
-  pc:  { icon: "🖥️",  name: "PC Agent", cls: "pc"  },
-  tv:  { icon: "📺", name: "TV Agent", cls: "tv"  },
-};
-
-// Fallback for unknown agents
-function agentMeta(id: string) {
-  return AGENT_META[id] ?? { icon: "🤖", name: id, cls: "unknown-agent" };
-}
+import { getAgentMeta } from "../lib/agentMeta";
 
 function fmtTime(ts: number): string {
   const d = new Date(ts);
@@ -80,7 +69,7 @@ function buildChat(events: FlowEvent[], taskId: string | undefined): ChatItem[] 
 function TaskBubble({ item }: { item: ChatItem & { type: "task-in" | "task-out" } }) {
   const e = item.ev;
   const isIn = item.type === "task-in";
-  const scenLabel = e.scenario === "scenario-1" ? "S1" : e.scenario === "scenario-2" ? "S2" : e.scenario;
+  const scenLabel = e.scenario?.replace(/^scenario-/, "S");
   return (
     <div className={`chat-system ${isIn ? "task-in" : "task-out"}`}>
       <div className="chat-sys-head">
@@ -98,8 +87,9 @@ function TaskBubble({ item }: { item: ChatItem & { type: "task-in" | "task-out" 
 // ---- Agent message chat bubble ----
 function MsgBubble({ item }: { item: ChatItem & { type: "msg" } }) {
   const e = item.ev;
-  const isHub = e.agentId === "hub";
-  const meta = agentMeta(e.agentId);
+  const agents = useStore((s) => s.agents);
+  const meta = getAgentMeta(e.agentId, agents[e.agentId]);
+  const isHub = meta.type === "hub";
 
   return (
     <div className={`chat-msg-row ${isHub ? "hub-side" : "other-side"}`}>

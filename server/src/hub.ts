@@ -114,9 +114,11 @@ export class Hub {
     }
   }
 
+  // No task subscription → live view of the whole space; otherwise filter by task.
   private matches(sub: Subscription, e: FlowEvent): boolean {
     if (e.kind === "agent") return true;
-    return sub.taskId != null && e.taskId === sub.taskId;
+    if (sub.taskId == null) return true;
+    return e.taskId === sub.taskId;
   }
 
   private updateTask(st: SpaceState, e: FlowEvent): void {
@@ -225,11 +227,19 @@ export class Hub {
     this.broadcastAll(this.spacesMessage());
   }
 
+  private static readonly LIVE_SNAPSHOT_TAIL = 200;
+
   private sendSnapshot(ws: WebSocket, sub: Subscription): void {
     const st = this.spaces.get(sub.space);
     const events: FlowEvent[] = st ? [...st.presence.values()] : [];
-    if (st && sub.taskId != null) {
-      for (const e of st.buffer.snapshot()) if (e.taskId === sub.taskId) events.push(e);
+    if (st) {
+      if (sub.taskId != null) {
+        for (const e of st.buffer.snapshot()) if (e.taskId === sub.taskId) events.push(e);
+      } else {
+        // live view: recent activity tail (agent events come from presence above)
+        const tail = st.buffer.snapshot().filter((e) => e.kind !== "agent");
+        events.push(...tail.slice(-Hub.LIVE_SNAPSHOT_TAIL));
+      }
     }
     events.sort((a, b) => a.ts - b.ts);
     this.send(ws, { type: "snapshot", events, space: sub.space, taskId: sub.taskId });
